@@ -10,16 +10,18 @@
 //! often useful to spawn a stream of futures that may not
 //! all be `'static`.
 //!
-//! While the future combinators such as [`for_each_concurrent`][for_each_concurrent]
-//! offer concurrency, they are bundled as a single [`Task`][Task]
+//! While the future combinators such as
+//! [`for_each_concurrent`][for_each_concurrent] offer
+//! concurrency, they are bundled as a single [`Task`][Task]
 //! structure by the executor, and hence are not driven
 //! parallelly.
 //!
 //! ## Scope API
 //!
-//! We propose an API similar to [`crossbeam::scope`](crossbeam::scope) to allow
-//! controlled spawning of futures that are not `'static`. The
-//! key function is:
+//! We propose an API similar to
+//! [`crossbeam::scope`](crossbeam::scope) to allow
+//! controlled spawning of futures that are not `'static`.
+//! The key function is:
 //!
 //! ``` rust, ignore
 //! pub unsafe fn scope<'a, T: Send + 'static,
@@ -92,11 +94,10 @@
 //! lifetime of the futures in the returned
 //! [`Stream`][Stream] object.
 //!
-//! Currently, for soundness, we simply panic! if the stream
-//! is dropped before it is fully driven. Another option
-//! (not implemented here), may be to drive the stream using
-//! a current-thread executor inside the [`Drop`][Drop]
-//! impl.
+//! Currently, for soundness, we panic! if the stream is
+//! dropped before it is fully driven. Another option (not
+//! implemented here), may be to drive the stream using a
+//! current-thread executor inside the [`Drop`][Drop] impl.
 //!
 //! Unfortunately, since the [`std::mem::forget`][forget]
 //! method is safe, the API here is _inherently unsafe_.
@@ -235,13 +236,15 @@ macro_rules! scope_and_iterate {
 /// implementation panics if the stream is incomplete.
 pub struct VerifiedStream<'a, S>{
     stream: S,
-    done: bool,
+    pub done: bool,
     pub len: usize,
     _marker: PhantomData<&'a ()>,
 }
 
-impl<'a, I: std::future::Future> From<FuturesOrdered<I>> for VerifiedStream<'a, FuturesOrdered<I>> {
-    fn from(stream: FuturesOrdered<I>) -> VerifiedStream<'a, FuturesOrdered<I>> {
+impl<'a, I: std::future::Future>
+From<FuturesOrdered<I>> for VerifiedStream<'a, FuturesOrdered<I>> {
+    fn from(stream: FuturesOrdered<I>)
+            -> VerifiedStream<'a, FuturesOrdered<I>> {
         VerifiedStream {
             len: stream.len(),
             done: false,
@@ -305,15 +308,10 @@ mod tests {
         // std::mem::drop(not_copy);
 
         use futures::StreamExt;
-
-        fn verify_send<T: Send>(_: &T) {}
-        verify_send(&stream);
-
         let count = stream.collect::<Vec<_>>().await.len();
 
-        // Drop here is okay, as stream is already dropped.
+        // Drop here is okay, as stream has been consumed.
         std::mem::drop(not_copy);
-
         assert_eq!(count, 10);
     }
 
@@ -355,7 +353,30 @@ mod tests {
         assert_eq!(count, 10);
     }
 
-    // StreamExt::collect of async_std does not preserve Send trait
+    // Mutability test: should fail to compile.
+    // TODO: use compiletest_rs
+    // #[async_std::test]
+    // async fn test_mutating_scope() {
+    //     let mut not_copy = String::from("hello world!");
+    //     let not_copy_ref = &mut not_copy;
+    //     let mut count = 0;
+
+    //     crate::scope_and_iterate!(|s| {
+    //         for _ in 0..10 {
+    //             let proc = || async {
+    //                 not_copy_ref.push('.');
+    //             };
+    //             s.spawn(proc()); //~ ERROR
+    //         }
+    //     }, |_| {
+    //         count += 1;
+    //         futures::future::ready(())
+    //     });
+
+    //     assert_eq!(count, 10);
+    // }
+
+    // StreamExt::collect of async_std does not preserve Send trait.
     // Uncomment this for test compilation error (add unstable in Cargo.toml)
     // #[async_std::test]
     // async fn test_send() {

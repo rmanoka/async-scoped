@@ -7,14 +7,40 @@ using the [async-std](//github.com/async-rs/async-std) executor.
 
 Present executors (such as async-std, tokio, etc.) all
 support spawning `'static` futures onto a thread-pool.
-However, it is often useful to _parallelly_ spawn a stream
-of futures.
+However, they do not support spawning futures with lifetime
+smaller than `'static`.
 
 While the future combinators such as `for_each_concurrent`
 offer concurrency, they are bundled as a single `Task`
 structure by the executor, and hence are not driven
 parallelly. This can be seen when benchmarking a reasonable
 number (> ~1K) of I/O futures, or a few CPU heavy futures.
+
+## Usage
+
+The API is meant to be a minimal wrapper around efficient
+executors. Currently, we only support `async_std`, but the
+API easily accomodates any spawn function that just accepts
+a `'static` future.
+
+``` rust
+#[async_std::test]
+async fn test_scope_and_collect() {
+    let not_copy = String::from("hello world!");
+    let not_copy_ref = &not_copy;
+
+    let (_, vals) = crate::scope_and_collect!(|s| {
+        for _ in 0..10 {
+            let proc = || async {
+                assert_eq!(not_copy_ref, "hello world!");
+            };
+            s.spawn(proc());
+        }
+    });
+
+    assert_eq!(vals.len(), 10);
+}
+```
 
 ## Scope API
 
@@ -61,10 +87,11 @@ async fn scoped_futures() {
 
 ## Safety Considerations
 
-The `scope` API provided in this crate is inherently unsafe.
-Here, we list the key reasons for unsafety, towards
-identifying a safe usage (facilitated by `scope_and_collect`
-macro).
+The `scope` API provided in this crate is unsafe (see the
+first point below). Here, we list the key reasons for
+unsafety, towards identifying a safe usage. The safe usage
+are facilitated by `scope_and_collect` and
+`scope_and_iterate` macros available in this crate.
 
 1. Since safe Rust allows `forget`-ting the returned
    `Stream`, the onus of actually driving it to completion
@@ -76,8 +103,15 @@ macro).
    `async-std`, `tokio`), and is crucial here.
 
 3. The `poll` of the `Task` containing the parent `Stream`
-   must not move or drop before completion. This should hold
-   even if some other futures in the `Task` panic.
+   must not move or drop `self` before completion of all
+   spawned futures
+
+4. The above should hold even if some other futures in the
+   `Task` panic. To our understanding, `async_std` assumes a
+   "panic == abort" model, and this somewhat simplifies our
+   concerns here. In particular, we _do not wrap_ the
+   spawned futures with `catch_unwind`, and `resume_unwind` in
+   this implementation.
 
 ## Implementation
 
@@ -94,3 +128,15 @@ this implementation.
 
 Unfortunately, since the `std::mem::forget` method is safe,
 the API here is _inherently unsafe_.
+
+### Efficiency
+
+Our implementation minimizes allocations to the best of our
+efforts. Unfortunately, this still amounts to one allocation
+per `spawn` call (not including any allocation done by the
+executor itself). This occurs while transmuting the lifetime
+of the future, which to the best of our knowledge is not
+possible without erasing the concrete type of the future
+itself. Please see the implementation of `Scope::spawn` in
+`src/lib.rs` for more details of the transmute, and
+allocation.

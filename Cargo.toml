@@ -4,6 +4,15 @@ version = "0.2.0"
 authors = ["Rajsekar Manokaran <rajsekar@gmail.com>"]
 edition = "2018"
 
+description = "Spawn scoped (non 'static) asynchronous futures using async_std runtime"
+homepage = "https://github.com/rmanoka/async-scoped"
+repository = "https://github.com/rmanoka/async-scoped"
+readme = "README.md"
+
+categories = [ "asynchronous", "concurrency" ]
+keywords = [ "async", "async-std", "scoped", "spawn" ]
+license = "Apache-2.0/MIT"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
