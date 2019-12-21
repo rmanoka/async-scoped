@@ -1,5 +1,7 @@
-//! Enables controlled spawning of non-`'static` futures when
-//! using the [async-std][async_std] executor.
+//! Enables controlled spawning of non-`'static` futures
+//! when using the [async-std][async_std] executor. Note
+//! that this idea is exactly as used in `crossbeam::scope`,
+//! and `rayon::scope`.
 //!
 //! ## Motivation
 //!
@@ -186,25 +188,45 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
 }
 
 /// A macro that creates a scope and immediately awaits the
-/// stream. The logic unwinds the stack if either the passed
-/// function, or any of the futures panic. However, it still
-/// awaits stream completion. This macro must be run within
-/// an async block that returns a Result.
+/// stream. The outputs of the futures are collected as a
+/// `Vec` and returned along with the output of the block.
+/// This macro _must be invoked_ within an async block.
 ///
 /// # Safety
 /// To the best of our understanding, it is safe to
-/// use this macro as it awaits the stream immediately and
-/// catches unwinds.
+/// use this macro as it awaits the stream immediately.
 #[macro_export]
 macro_rules! scope_and_collect {
     ($fn: expr) => {{
+        let (mut stream, block_output) = {
+            unsafe { $crate::scope($fn) }
+        };
+        let mut proc_outputs = Vec::with_capacity(stream.len);
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            proc_outputs.push(item);
+        }
+        (block_output, proc_outputs)
+    }}
+}
+
+/// A macro that creates a scope and immediately awaits the
+/// stream, and sends it through an FnMut. It takes two
+/// args, the first that spawns the futures, and the second
+/// is the function to call on the stream. This macro _must be
+/// invoked_ within an async block.
+///
+/// # Safety
+/// To the best of our understanding, it is safe to
+/// use this macro as it fully drains the stream before
+/// returning.
+#[macro_export]
+macro_rules! scope_and_iterate {
+    ($fn: expr, $iter_fn: expr) => {{
         let (stream, block_output) = {
             unsafe { $crate::scope($fn) }
         };
-
-        use async_std::prelude::StreamExt;
-        let proc_outputs = StreamExt::collect::<Vec<_>>(stream).await;
-        (block_output, proc_outputs)
+        futures::StreamExt::for_each(stream, $iter_fn).await;
+        block_output
     }}
 }
 
@@ -214,15 +236,17 @@ macro_rules! scope_and_collect {
 pub struct VerifiedStream<'a, S>{
     stream: S,
     done: bool,
+    pub len: usize,
     _marker: PhantomData<&'a ()>,
 }
 
-impl<'a, S: 'a> From<S> for VerifiedStream<'a, S> {
-    fn from(stream: S) -> VerifiedStream<'a, S> {
+impl<'a, I: std::future::Future> From<FuturesOrdered<I>> for VerifiedStream<'a, FuturesOrdered<I>> {
+    fn from(stream: FuturesOrdered<I>) -> VerifiedStream<'a, FuturesOrdered<I>> {
         VerifiedStream {
-            stream,
+            len: stream.len(),
             done: false,
             _marker: PhantomData,
+            stream,
         }
     }
 }
@@ -234,6 +258,7 @@ impl<'a, I, S: Stream<Item=I>> VerifiedStream<'a, S> {
     }
 
     fn done(self: Pin<&mut Self>) -> &mut bool {
+        // Only for projection in `poll_next`.
         unsafe { &mut self.get_unchecked_mut().done }
     }
 }
@@ -263,7 +288,7 @@ impl<'a, I, T: Stream<Item=I>> Stream for VerifiedStream<'a, T> {
 #[cfg(test)]
 mod tests {
     #[async_std::test]
-    async fn scoped_futures() {
+    async fn test_scope() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
@@ -280,6 +305,10 @@ mod tests {
         // std::mem::drop(not_copy);
 
         use futures::StreamExt;
+
+        fn verify_send<T: Send>(_: &T) {}
+        verify_send(&stream);
+
         let count = stream.collect::<Vec<_>>().await.len();
 
         // Drop here is okay, as stream is already dropped.
@@ -289,7 +318,7 @@ mod tests {
     }
 
     #[async_std::test]
-    async fn scoped_await() {
+    async fn test_scope_and_collect() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
@@ -304,4 +333,39 @@ mod tests {
 
         assert_eq!(vals.len(), 10);
     }
+
+    #[async_std::test]
+    async fn test_scope_and_iterate() {
+        let not_copy = String::from("hello world!");
+        let not_copy_ref = &not_copy;
+        let mut count = 0;
+
+        crate::scope_and_iterate!(|s| {
+            for _ in 0..10 {
+                let proc = || async {
+                    assert_eq!(not_copy_ref, "hello world!");
+                };
+                s.spawn(proc());
+            }
+        }, |_| {
+            count += 1;
+            futures::future::ready(())
+        });
+
+        assert_eq!(count, 10);
+    }
+
+    // StreamExt::collect of async_std does not preserve Send trait
+    // Uncomment this for test compilation error (add unstable in Cargo.toml)
+    // #[async_std::test]
+    // async fn test_send() {
+    //     fn test_send_trait<T: Send>(_: &T) {}
+
+    //     let stream = futures::stream::pending::<()>();
+    //     test_send_trait(&stream);
+
+    //     use async_std::prelude::StreamExt;
+    //     let fut = stream.collect::<Vec<_>>();
+    //     test_send_trait(&fut);
+    // }
 }
