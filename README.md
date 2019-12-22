@@ -25,11 +25,11 @@ a `'static` future.
 
 ``` rust
 #[async_std::test]
-async fn test_scope_and_collect() {
+async fn test_scope_and_block() {
     let not_copy = String::from("hello world!");
     let not_copy_ref = &not_copy;
 
-    let (_, vals) = crate::scope_and_collect!(|s| {
+    let (_, vals) = crate::scope_and_block!(|s| {
         for _ in 0..10 {
             let proc = || async {
                 assert_eq!(not_copy_ref, "hello world!");
@@ -90,8 +90,15 @@ async fn scoped_futures() {
 The `scope` API provided in this crate is unsafe (see the
 first point below). Here, we list the key reasons for
 unsafety, towards identifying a safe usage. The safe usage
-are facilitated by `scope_and_collect` and
-`scope_and_iterate` macros available in this crate.
+are facilitated by `scope_and_block` macro available in this
+crate. Unfortunately, this macro _does block the current
+thread_.
+
+Please note that, in an earlier version of this crate, we
+incorrectly claimed that `scope_and_collect` may also be a
+sound macro. This was proven
+[otherwise](https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x).
+
 
 1. Since safe Rust allows `forget`-ting the returned
    `Stream`, the onus of actually driving it to completion

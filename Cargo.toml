@@ -1,9 +1,10 @@
 [package]
 name = "async-scoped"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Rajsekar Manokaran <rajsekar@gmail.com>"]
 edition = "2018"
 
+documentation = "https://docs.rs/async-scoped"
 description = "Spawn scoped (non 'static) asynchronous futures using async_std runtime"
 homepage = "https://github.com/rmanoka/async-scoped"
 repository = "https://github.com/rmanoka/async-scoped"

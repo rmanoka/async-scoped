@@ -38,7 +38,7 @@
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = crate::scope_and_collect!(|s| {
+//!     let (foo, outputs) = crate::scope_and_block!(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
@@ -57,7 +57,7 @@
 //! The [`scope`][scope] API provided in this crate is
 //! inherently unsafe. Here, we list the key reasons for
 //! unsafety, towards identifying a safe usage (facilitated
-//! by [`scope_and_collect!`][scope_and_collect!] macro).
+//! _only_ by [`scope_and_block!`][scope_and_block!] macro).
 //!
 //! 1. Since safe Rust allows [`forget`][forget]-ting the
 //!    returned [`Stream`][Stream], the onus of actually
@@ -74,10 +74,8 @@
 //!    the spawned futures must not be moved while the
 //!    spawned futures are running. To the best of our
 //!    understanding, the compiler should deduce that an
-//!    async function that uses
-//!    [`scope_and_collect!`][scope_and_collect!] (or
-//!    equivalently [`scope`][scope] and awaiting the output
-//!    within the function) is [`!Unpin`][!Unpin].
+//!    async function that uses [`scope`][scope] is
+//!    [`!Unpin`][!Unpin].
 //!
 //! 4. The [`Task`][Task] containing the parent Stream must
 //!    not drop the future before completion. This is
@@ -122,7 +120,7 @@ use std::task::{Context, Poll};
 /// futures.
 pub struct Scope<'a, T: Send + 'static> {
     futs: FuturesOrdered<JoinHandle<T>>,
-    _marker: PhantomData<fn(&'a ())>
+    _marker: PhantomData<fn(&'a  ())>
 }
 
 impl<'a, T: Send + 'static> Scope<'a, T> {
@@ -188,16 +186,41 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
     (scope.futs.into(), op)
 }
 
+/// A macro that creates a scope and immediately awaits,
+/// _blocking the current thread_ for spawned futures to
+/// complete. The outputs of the futures are collected as a
+/// `Vec` and returned along with the output of the block.
+///
+/// # Safety
+/// This macro is safe to the best of our understanding.
+#[macro_export]
+macro_rules! scope_and_block {
+    ($fn: expr) => {{
+        let (mut stream, block_output) = {
+            unsafe { $crate::scope($fn) }
+        };
+
+        let mut proc_outputs = Vec::with_capacity(stream.len);
+        async_std::task::block_on(async {
+            while let Some(item) = futures::StreamExt::next(&mut stream).await {
+                proc_outputs.push(item);
+            }
+        });
+
+        (block_output, proc_outputs)
+    }}
+}
+
 /// A macro that creates a scope and immediately awaits the
 /// stream. The outputs of the futures are collected as a
 /// `Vec` and returned along with the output of the block.
 /// This macro _must be invoked_ within an async block.
 ///
 /// # Safety
-/// To the best of our understanding, it is safe to
-/// use this macro as it awaits the stream immediately.
+/// This macro is _not really safe_: please see
+/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
 #[macro_export]
-macro_rules! scope_and_collect {
+macro_rules! unsafe_scope_and_collect {
     ($fn: expr) => {{
         let (mut stream, block_output) = {
             unsafe { $crate::scope($fn) }
@@ -217,11 +240,10 @@ macro_rules! scope_and_collect {
 /// invoked_ within an async block.
 ///
 /// # Safety
-/// To the best of our understanding, it is safe to
-/// use this macro as it fully drains the stream before
-/// returning.
+/// This macro is _not really safe_: please see
+/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
 #[macro_export]
-macro_rules! scope_and_iterate {
+macro_rules! unsafe_scope_and_iterate {
     ($fn: expr, $iter_fn: expr) => {{
         let (stream, block_output) = {
             unsafe { $crate::scope($fn) }
@@ -320,7 +342,7 @@ mod tests {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
-        let (_, vals) = crate::scope_and_collect!(|s| {
+        let (_, vals) = crate::unsafe_scope_and_collect!(|s| {
             for _ in 0..10 {
                 let proc = || async {
                     assert_eq!(not_copy_ref, "hello world!");
@@ -338,7 +360,7 @@ mod tests {
         let not_copy_ref = &not_copy;
         let mut count = 0;
 
-        crate::scope_and_iterate!(|s| {
+        crate::unsafe_scope_and_iterate!(|s| {
             for _ in 0..10 {
                 let proc = || async {
                     assert_eq!(not_copy_ref, "hello world!");
@@ -351,6 +373,23 @@ mod tests {
         });
 
         assert_eq!(count, 10);
+    }
+
+    #[async_std::test]
+    async fn test_scope_and_block() {
+        let not_copy = String::from("hello world!");
+        let not_copy_ref = &not_copy;
+
+        let ((), vals) = crate::scope_and_block!(|s| {
+            for _ in 0..10 {
+                let proc = || async {
+                    assert_eq!(not_copy_ref, "hello world!");
+                };
+                s.spawn(proc());
+            }
+        });
+
+        assert_eq!(vals.len(), 10);
     }
 
     // Mutability test: should fail to compile.
