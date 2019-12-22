@@ -186,12 +186,108 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
     (scope.futs.into(), op)
 }
 
+/// A function that creates a scope and immediately awaits,
+/// _blocking the current thread_ for spawned futures to
+/// complete. The outputs of the futures are collected as a
+/// `Vec` and returned along with the output of the block.
+///
+/// # Safety
+///
+/// This function is safe to the best of our understanding
+/// as it blocks the current thread until the stream is
+/// driven to completion, implying that all the spawned
+/// futures have completed too. However, care must be taken
+/// to ensure a recursive usage of this function doesn't
+/// lead to deadlocks. When scope is used recursively, you
+/// may also use the unsafe `scope_and_*` functions as long
+/// as this function is used at the top level.
+pub fn scope_and_block
+    <'a,
+     T: Send + 'static, R,
+     F: FnOnce(&mut Scope<'a, T>) -> R
+     >(f: F) -> (R, Vec<T>) {
+
+        let (mut stream, block_output) = {
+            unsafe { scope(f) }
+        };
+
+        let mut proc_outputs = Vec::with_capacity(stream.len);
+        async_std::task::block_on(async {
+            while let Some(item) = futures::StreamExt::next(&mut stream).await {
+                proc_outputs.push(item);
+            }
+        });
+
+        (block_output, proc_outputs)
+}
+
+/// An asynchronous function that creates a scope and
+/// immediately awaits the stream. The outputs of the
+/// futures are collected as a `Vec` and returned along with
+/// the output of the block. This macro _must be invoked_
+/// within an async block.
+///
+/// # Safety This macro is _not completely safe_: please see
+/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+/// The caller must ensure the enclosing async block (and
+/// it's stack) does not collapse before the macro completes
+/// driving the stream. However, unless the enclosing future
+/// gets forgotten, the implementation will still panic when
+/// the returned future is dropped without being fully
+/// driven.
+pub async unsafe fn scope_and_collect
+    <'a,
+     T: Send + 'static, R,
+     F: FnOnce(&mut Scope<'a, T>) -> R
+     >(f: F) -> (R, Vec<T>) {
+
+        let (mut stream, block_output) = scope(f);
+
+        let mut proc_outputs = Vec::with_capacity(stream.len);
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            proc_outputs.push(item);
+        }
+        (block_output, proc_outputs)
+}
+
+/// An asynchronous function that creates a scope and
+/// immediately awaits the stream, and sends it through an
+/// FnMut (using `futures::StreamExt::for_each`). It takes
+/// two args, the first that spawns the futures, and the
+/// second is the function to call on the stream. This macro
+/// _must be invoked_ within an async block.
+///
+/// # Safety This macro is _not completely safe_: please see
+/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+/// The caller must ensure the enclosing async block (and
+/// it's stack) does not collapse before the macro completes
+/// driving the stream. However, unless the enclosing future
+/// gets forgotten, the implementation will still panic when
+/// the returned future is dropped without being fully
+/// driven.
+pub async unsafe fn scope_and_iterate
+    <'a,
+     T: Send + 'static, R,
+     F: FnOnce(&mut Scope<'a, T>) -> R,
+     G: FnMut(T) -> H,
+     H: Future<Output=()>
+     >(f: F, g: G) -> R {
+
+        let (stream, block_output) = scope(f);
+        futures::StreamExt::for_each(stream, g).await;
+        block_output
+
+}
+
+/// DEPRECATED: please use the function variant.
+///
 /// A macro that creates a scope and immediately awaits,
 /// _blocking the current thread_ for spawned futures to
 /// complete. The outputs of the futures are collected as a
 /// `Vec` and returned along with the output of the block.
 ///
 /// # Safety
+///
 /// This macro is safe to the best of our understanding.
 #[macro_export]
 macro_rules! scope_and_block {
@@ -211,14 +307,21 @@ macro_rules! scope_and_block {
     }}
 }
 
+/// DEPRECATED: please use the function variant.
+///
 /// A macro that creates a scope and immediately awaits the
 /// stream. The outputs of the futures are collected as a
 /// `Vec` and returned along with the output of the block.
 /// This macro _must be invoked_ within an async block.
 ///
-/// # Safety
-/// This macro is _not really safe_: please see
+/// # Safety This macro is _not completely safe_: please see
 /// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+/// The caller must ensure the enclosing async block (and
+/// it's stack) does not collapse before the macro completes
+/// driving the stream. However, unless the enclosing future
+/// gets forgotten, the implementation will still panic when
+/// the returned future is dropped without being fully
+/// driven.
 #[macro_export]
 macro_rules! unsafe_scope_and_collect {
     ($fn: expr) => {{
@@ -233,15 +336,22 @@ macro_rules! unsafe_scope_and_collect {
     }}
 }
 
+/// DEPRECATED: please use the function variant.
+///
 /// A macro that creates a scope and immediately awaits the
 /// stream, and sends it through an FnMut. It takes two
 /// args, the first that spawns the futures, and the second
 /// is the function to call on the stream. This macro _must be
 /// invoked_ within an async block.
 ///
-/// # Safety
-/// This macro is _not really safe_: please see
+/// # Safety This macro is _not completely safe_: please see
 /// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+/// The caller must ensure the enclosing async block (and
+/// it's stack) does not collapse before the macro completes
+/// driving the stream. However, unless the enclosing future
+/// gets forgotten, the implementation will still panic when
+/// the returned future is dropped without being fully
+/// driven.
 #[macro_export]
 macro_rules! unsafe_scope_and_iterate {
     ($fn: expr, $iter_fn: expr) => {{
@@ -342,14 +452,14 @@ mod tests {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
-        let (_, vals) = crate::unsafe_scope_and_collect!(|s| {
+        let (_, vals) = unsafe { crate::scope_and_collect(|s| {
             for _ in 0..10 {
                 let proc = || async {
                     assert_eq!(not_copy_ref, "hello world!");
                 };
                 s.spawn(proc());
             }
-        });
+        }) }.await;
 
         assert_eq!(vals.len(), 10);
     }
@@ -360,7 +470,7 @@ mod tests {
         let not_copy_ref = &not_copy;
         let mut count = 0;
 
-        crate::unsafe_scope_and_iterate!(|s| {
+        unsafe { crate::scope_and_iterate(|s| {
             for _ in 0..10 {
                 let proc = || async {
                     assert_eq!(not_copy_ref, "hello world!");
@@ -370,7 +480,7 @@ mod tests {
         }, |_| {
             count += 1;
             futures::future::ready(())
-        });
+        }) }.await;
 
         assert_eq!(count, 10);
     }
@@ -380,7 +490,7 @@ mod tests {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
-        let ((), vals) = crate::scope_and_block!(|s| {
+        let ((), vals) = crate::scope_and_block(|s| {
             for _ in 0..10 {
                 let proc = || async {
                     assert_eq!(not_copy_ref, "hello world!");
