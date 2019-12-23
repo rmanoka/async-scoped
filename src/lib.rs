@@ -1,7 +1,7 @@
 //! Enables controlled spawning of non-`'static` futures
 //! when using the [async-std][async_std] executor. Note
-//! that this idea is exactly as used in `crossbeam::scope`,
-//! and `rayon::scope`.
+//! that this idea is similar to used in `crossbeam::scope`,
+//! and `rayon::scope` but asynchronous.
 //!
 //! ## Motivation
 //!
@@ -38,7 +38,7 @@
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = crate::scope_and_block!(|s| {
+//!     let (foo, outputs) = crate::scope_and_block(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
@@ -52,12 +52,20 @@
 //! }
 //! ```
 //!
+//! The `scope_and_block` function above blocks the current
+//! thread in order to guarantee safety. We also provide an
+//! unsafe `scope_and_collect`, which is asynchronous, and
+//! does not block the current thread. However, the user
+//! should ensure that the future that calls this function
+//! is not cancelled before all the spawned futures are
+//! driven to completion.
+//!
 //! ## Safety Considerations
 //!
 //! The [`scope`][scope] API provided in this crate is
 //! inherently unsafe. Here, we list the key reasons for
 //! unsafety, towards identifying a safe usage (facilitated
-//! _only_ by [`scope_and_block!`][scope_and_block!] macro).
+//! _only_ by [`scope_and_block`][scope_and_block] function).
 //!
 //! 1. Since safe Rust allows [`forget`][forget]-ting the
 //!    returned [`Stream`][Stream], the onus of actually
@@ -106,7 +114,6 @@
 //! [forget]: std::mem::forget
 //! [Stream]: futures::Stream
 //! [for_each_concurrent]: futures::StreamExt::for_each_concurrent
-
 use futures::{Future, FutureExt, Stream};
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
@@ -198,9 +205,14 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
 /// driven to completion, implying that all the spawned
 /// futures have completed too. However, care must be taken
 /// to ensure a recursive usage of this function doesn't
-/// lead to deadlocks. When scope is used recursively, you
-/// may also use the unsafe `scope_and_*` functions as long
-/// as this function is used at the top level.
+/// lead to deadlocks.
+///
+/// When scope is used recursively, you may also use the
+/// unsafe `scope_and_*` functions as long as this function
+/// is used at the top level. In this case, either the
+/// recursively spawned should have the same lifetime as the
+/// top-level scope, or there should not be any spurious
+/// future cancellations within the top level scope.
 pub fn scope_and_block
     <'a,
      T: Send + 'static, R,
@@ -227,7 +239,9 @@ pub fn scope_and_block
 /// the output of the block. This macro _must be invoked_
 /// within an async block.
 ///
-/// # Safety This macro is _not completely safe_: please see
+/// # Safety
+///
+/// This macro is _not completely safe_: please see
 /// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
 /// The caller must ensure the enclosing async block (and
 /// it's stack) does not collapse before the macro completes
@@ -257,7 +271,9 @@ pub async unsafe fn scope_and_collect
 /// second is the function to call on the stream. This macro
 /// _must be invoked_ within an async block.
 ///
-/// # Safety This macro is _not completely safe_: please see
+/// # Safety
+///
+/// This macro is _not completely safe_: please see
 /// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
 /// The caller must ensure the enclosing async block (and
 /// it's stack) does not collapse before the macro completes
@@ -501,6 +517,33 @@ mod tests {
 
         assert_eq!(vals.len(), 10);
     }
+
+    // #[async_std::test]
+    // async fn test_async_deadlock() {
+    //     use std::future::Future;
+    //     use futures::FutureExt;
+    //     femme::start(log::LevelFilter::Trace).unwrap();
+
+    //     fn nth(n: usize) -> impl Future<Output=usize> + Send {
+    //         eprintln!("@nth, n={}", n);
+    //         async move {
+    //             eprintln!("@block_on, n={}", n);
+    //             async_std::task::block_on(async move {
+
+    //                 if n == 0 {
+    //                     0
+    //                 } else {
+    //                     eprintln!("@spawn, n={}", n);
+    //                     let fut = async_std::task::spawn(nth(n-1)).boxed();
+    //                     fut.await + 1
+    //                 }
+
+    //             })
+    //         }
+    //     }
+    //     let input = 5;
+    //     assert_eq!(nth(input).await, input);
+    // }
 
     // Mutability test: should fail to compile.
     // TODO: use compiletest_rs
