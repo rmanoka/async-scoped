@@ -439,7 +439,7 @@ impl<'a, I, T: Stream<Item=I>> Stream for VerifiedStream<'a, T> {
 #[cfg(test)]
 mod tests {
     #[async_std::test]
-    async fn test_scope() {
+    async fn scope() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[async_std::test]
-    async fn test_scope_and_collect() {
+    async fn scope_and_collect() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
@@ -481,7 +481,7 @@ mod tests {
     }
 
     #[async_std::test]
-    async fn test_scope_and_iterate() {
+    async fn scope_and_iterate() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
         let mut count = 0;
@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[async_std::test]
-    async fn test_scope_and_block() {
+    async fn scope_and_block() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
 
@@ -518,8 +518,46 @@ mod tests {
         assert_eq!(vals.len(), 10);
     }
 
+    /// This is a simplified version of the soundness bug
+    /// pointed out on reddit. Here, we test that it does
+    /// not happen when using the `scope_and_block`
+    /// function. Using `scope_and_collect` here should
+    /// trigger a panic.
+    #[async_std::test]
+    async fn cancellation_soundness() {
+        use async_std::future;
+        use std::time::Duration;
+
+        async fn inner() {
+            let mut shared = true;
+            let shared_ref = &mut shared;
+
+            let mut fut = Box::pin(
+                // Change next line to below for panic.
+                // unsafe { crate::scope_and_collect(|scope| {
+                async { crate::scope_and_block(|scope| {
+                    scope.spawn(async {
+                        assert!(future::timeout(
+                            Duration::from_millis(100),
+                            future::pending::<()>(),
+                        ).await.is_err());
+                        assert!(*shared_ref);
+                    });
+                })}
+            );
+            #[allow(unused_must_use)]
+            let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
+            std::mem::forget(fut);
+        }
+
+        inner().await;
+        assert!(future::timeout(Duration::from_millis(100),
+                        future::pending::<()>()).await.is_err());
+
+    }
+
     // #[async_std::test]
-    // async fn test_async_deadlock() {
+    // async fn async_deadlock() {
     //     use std::future::Future;
     //     use futures::FutureExt;
     //     femme::start(log::LevelFilter::Trace).unwrap();
@@ -548,7 +586,7 @@ mod tests {
     // Mutability test: should fail to compile.
     // TODO: use compiletest_rs
     // #[async_std::test]
-    // async fn test_mutating_scope() {
+    // async fn mutating_scope() {
     //     let mut not_copy = String::from("hello world!");
     //     let not_copy_ref = &mut not_copy;
     //     let mut count = 0;
@@ -571,7 +609,7 @@ mod tests {
     // StreamExt::collect of async_std does not preserve Send trait.
     // Uncomment this for test compilation error (add unstable in Cargo.toml)
     // #[async_std::test]
-    // async fn test_send() {
+    // async fn send() {
     //     fn test_send_trait<T: Send>(_: &T) {}
 
     //     let stream = futures::stream::pending::<()>();
