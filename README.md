@@ -24,12 +24,14 @@ API easily accomodates any spawn function that just accepts
 a `'static` future.
 
 ``` rust
+#![feature(async_closure)]
+
 #[async_std::test]
 async fn test_scope_and_block() {
     let not_copy = String::from("hello world!");
     let not_copy_ref = &not_copy;
 
-    let (_, vals) = crate::scope_and_block(|s| {
+    let (_, vals) = async_scoped::scope_and_block(|s| {
         for _ in 0..10 {
             let proc = || async {
                 assert_eq!(not_copy_ref, "hello world!");
@@ -59,19 +61,23 @@ pub unsafe fn scope<'a, T: Send + 'static,
 This function is used as follows:
 
 ``` rust
+#![feature(async_closure)]
+
 #[async_std::test]
 async fn scoped_futures() {
     let not_copy = String::from("hello world!");
     let not_copy_ref = &not_copy;
 
-    let mut stream = unsafe { crate::scope(|s| {
-        for _ in 0..10 {
-            let proc = async || {
-                assert_eq!(not_copy_ref, "hello world!");
-            };
-            s.spawn(proc());
-        }
-    }) };
+    let (mut stream, _) = unsafe {
+        async_scoped::scope(|s| {
+            for _ in 0..10 {
+                let proc = async || {
+                    assert_eq!(not_copy_ref, "hello world!");
+                };
+                s.spawn(proc());
+            }
+        })
+    };
 
     // Uncomment this for compile error
     // std::mem::drop(not_copy);
