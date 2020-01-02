@@ -159,6 +159,15 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         });
         self.futs.push(handle);
     }
+
+    /// Convert `Scope` into a `Stream` of spawned future outputs.
+    ///
+    /// This function is useful when using Scope in an async
+    /// context. This allows, for instance, to apply
+    /// back-pressure.
+    pub fn into_stream(self) -> VerifiedStream<'a, FuturesOrdered<JoinHandle<T>>> {
+        self.futs.into()
+    }
 }
 
 /// Creates a `Scope` to spawn non-'static futures. The
@@ -190,7 +199,7 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
     // completion and dropped.
     let mut scope = Scope::create();
     let op = f(&mut scope);
-    (scope.futs.into(), op)
+    (scope.into_stream(), op)
 }
 
 /// A function that creates a scope and immediately awaits,
@@ -464,6 +473,40 @@ mod tests {
     }
 
     #[async_std::test]
+    async fn scope_async() {
+        let not_copy = String::from("hello world!");
+        let not_copy_ref = &not_copy;
+
+        let stream = unsafe {
+            use async_std::future::{timeout, pending};
+            use std::time::Duration;
+            let mut s = crate::Scope::create();
+            for _ in 0..10 {
+                let proc = || async move {
+                    assert_eq!(not_copy_ref, "hello world!");
+                };
+                s.spawn(proc());
+                let _ = timeout(
+                    Duration::from_millis(10),
+                    pending::<()>(),
+                ).await;
+            }
+            s.into_stream()
+        };
+
+        // Uncomment this for compile error
+        // std::mem::drop(not_copy);
+
+        use futures::StreamExt;
+        let count = stream.collect::<Vec<_>>().await.len();
+
+        // Drop here is okay, as stream has been consumed.
+        std::mem::drop(not_copy);
+        assert_eq!(count, 10);
+    }
+
+
+    #[async_std::test]
     async fn scope_and_collect() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
@@ -556,33 +599,6 @@ mod tests {
 
     }
 
-    // #[async_std::test]
-    // async fn async_deadlock() {
-    //     use std::future::Future;
-    //     use futures::FutureExt;
-    //     femme::start(log::LevelFilter::Trace).unwrap();
-
-    //     fn nth(n: usize) -> impl Future<Output=usize> + Send {
-    //         eprintln!("@nth, n={}", n);
-    //         async move {
-    //             eprintln!("@block_on, n={}", n);
-    //             async_std::task::block_on(async move {
-
-    //                 if n == 0 {
-    //                     0
-    //                 } else {
-    //                     eprintln!("@spawn, n={}", n);
-    //                     let fut = async_std::task::spawn(nth(n-1)).boxed();
-    //                     fut.await + 1
-    //                 }
-
-    //             })
-    //         }
-    //     }
-    //     let input = 5;
-    //     assert_eq!(nth(input).await, input);
-    // }
-
     // Mutability test: should fail to compile.
     // TODO: use compiletest_rs
     // #[async_std::test]
@@ -604,19 +620,5 @@ mod tests {
     //     });
 
     //     assert_eq!(count, 10);
-    // }
-
-    // StreamExt::collect of async_std does not preserve Send trait.
-    // Uncomment this for test compilation error (add unstable in Cargo.toml)
-    // #[async_std::test]
-    // async fn send() {
-    //     fn test_send_trait<T: Send>(_: &T) {}
-
-    //     let stream = futures::stream::pending::<()>();
-    //     test_send_trait(&stream);
-
-    //     use async_std::prelude::StreamExt;
-    //     let fut = stream.collect::<Vec<_>>();
-    //     test_send_trait(&fut);
     // }
 }
