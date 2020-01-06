@@ -58,6 +58,23 @@
 //! should ensure that the returned future is not forgetten
 //! before being driven to completion.
 //!
+//! ## Cancellation
+//!
+//! To support cancellation, `Scope` provides a
+//! `spawn_cancellable` which wraps a future to make it
+//! cancellable. When a `VerifiedStream` obtained from a
+//! `Scope` is dropped, (or if `cancel` method is invoked),
+//! all the futures are scheduled for cancellation. In the
+//! next poll of the futures, they are dropped and a default
+//! value (provided by a closure during spawn) is returned
+//! as the output of the future.
+//!
+//! Note that cancellation requires some reasonable
+//! behaviour from the future and futures that do not return
+//! control to the executor cannot be cancelled. If such
+//! futures have been spawned, the `cancel` (async) method
+//! would wait.
+//!
 //! ## Safety Considerations
 //!
 //! The [`scope`][scope] API provided in this crate is
@@ -158,9 +175,10 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
 
     /// Spawn a cancellable future with `async_std::task::spawn`
     ///
-    /// The future is may be cancelled if the
-    /// `VerifiedStream` returned by the calling `Scope` is
-    /// dropped pre-maturely.
+    /// The future is cancelled if the `VerifiedStream`
+    /// returned by the calling `Scope` is dropped
+    /// pre-maturely. It can also be cancelled by explicitly
+    /// calling (and awaiting) the `cancel` method.
     ///
     /// # Safety
     ///

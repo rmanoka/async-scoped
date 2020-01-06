@@ -21,17 +21,6 @@ pub struct VerifiedStream<'a, S: Stream>{
     _marker: PhantomData<&'a ()>,
 }
 
-// impl<'a, I: std::future::Future> From<FuturesOrdered<I>, > for VerifiedStream<'a, FuturesOrdered<I>> {
-//     fn from(stream: FuturesOrdered<I>) -> VerifiedStream<'a, FuturesOrdered<I>> {
-//         VerifiedStream {
-//             len: stream.len(),
-//             done: false,
-//             _marker: PhantomData,
-//             stream,
-//         }
-//     }
-// }
-
 impl<'a, I, S: Stream<Item=I>> VerifiedStream<'a, S> {
     pub fn new(stream: S, len: usize, lock: Arc<RwLock<bool>>, read_wakers: Arc<Mutex<Vec<Waker>>>) -> Self {
         VerifiedStream {
@@ -50,23 +39,29 @@ impl<'a, I, S: Stream<Item=I>> VerifiedStream<'a, S> {
         // Only for projection in `poll_next`.
         unsafe { &mut self.get_unchecked_mut().done }
     }
+
+    /// Cancel all futures spawned with cancellation.
+    pub async fn cancel(&self) {
+        // Mark scope as being cancelled.
+        *(self.lock.write().await) = false;
+
+        // At this point, the read_wakers list is stable.
+        // No more wakers could be added any more (as the flag is set).
+        let mut list = self.read_wakers.lock().unwrap();
+        for w in list.iter() {
+            w.wake_by_ref();
+        }
+        list.clear();
+    }
 }
 
 impl<'a, T: Stream> Drop for VerifiedStream<'a, T> {
     fn drop(&mut self) {
         if !self.done {
-            // This is the destructor, so it is okay to pin from &mut
-            let mut pinned: Pin<&mut Self> = unsafe { Pin::new_unchecked(self) };
-
             async_std::task::block_on(async {
-                // Mark scope as being dropped.
-                *(pinned.lock.write().await) = false;
-
-                // At this point, the read_wakers list is stable.
-                // No more wakers could be added any more (as the flag is set).
-                for w in pinned.read_wakers.lock().unwrap().iter() {
-                    w.wake_by_ref();
-                }
+                // This is the destructor, so it is okay to pin from &mut
+                let mut pinned: Pin<&mut Self> = unsafe { Pin::new_unchecked(self) };
+                pinned.cancel().await;
 
                 // Await all the futures to be dropped.
                 use futures::StreamExt;
@@ -76,14 +71,6 @@ impl<'a, T: Stream> Drop for VerifiedStream<'a, T> {
         }
     }
 }
-
-// default impl<'a, T> Drop for VerifiedStream<'a, T> {
-//     fn drop(&mut self) {
-//         if !self.done {
-//             panic!("Scoped future streams must be run to completion");
-//         }
-//     }
-// }
 
 impl<'a, I, T: Stream<Item=I>> Stream for VerifiedStream<'a, T> {
     type Item = I;

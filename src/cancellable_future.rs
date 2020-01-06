@@ -4,6 +4,10 @@ use std::{
     task::{Poll, Context, Waker}};
 use async_std::sync::RwLock;
 
+/// A wrapper for `Future` to make it cancellable from the
+/// scope that spawned it. The future may be cancelled by
+/// calling `cancel` method on `VerifiedStream` obtained
+/// from the scope.
 pub struct CancellableFuture<I, F: Future<Output=I>, Fu: FnOnce() -> I> {
     lock: Arc<RwLock<bool>>,
     read_wakers: Arc<Mutex<Vec<Waker>>>,
