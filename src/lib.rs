@@ -1,7 +1,8 @@
+#![feature(specialization)]
 //! Enables controlled spawning of non-`'static` futures
 //! when using the [async-std][async_std] executor. Note
-//! that this idea is similar to used in `crossbeam::scope`,
-//! and `rayon::scope` but asynchronous.
+//! that this idea is similar to `crossbeam::scope`, and
+//! `rayon::scope` but asynchronous.
 //!
 //! ## Motivation
 //!
@@ -114,14 +115,14 @@
 //! [forget]: std::mem::forget
 //! [Stream]: futures::Stream
 //! [for_each_concurrent]: futures::StreamExt::for_each_concurrent
-use futures::{Future, FutureExt, Stream};
+use futures::{Future, FutureExt};
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use async_std::task::JoinHandle;
-
-use std::pin::Pin;
 use std::marker::PhantomData;
-use std::task::{Context, Poll};
+
+mod verified_stream;
+pub use verified_stream::VerifiedStream;
 
 /// A scope to allow controlled spawning of non 'static
 /// futures.
@@ -222,24 +223,24 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
 /// recursively spawned should have the same lifetime as the
 /// top-level scope, or there should not be any spurious
 /// future cancellations within the top level scope.
-pub fn scope_and_block
-    <'a,
-     T: Send + 'static, R,
-     F: FnOnce(&mut Scope<'a, T>) -> R
-     >(f: F) -> (R, Vec<T>) {
+pub fn scope_and_block<
+        'a,
+    T: Send + 'static, R,
+    F: FnOnce(&mut Scope<'a, T>) -> R
+        >(f: F) -> (R, Vec<T>) {
 
-        let (mut stream, block_output) = {
-            unsafe { scope(f) }
-        };
+    let (mut stream, block_output) = {
+        unsafe { scope(f) }
+    };
 
-        let mut proc_outputs = Vec::with_capacity(stream.len);
-        async_std::task::block_on(async {
-            while let Some(item) = futures::StreamExt::next(&mut stream).await {
-                proc_outputs.push(item);
-            }
-        });
+    let mut proc_outputs = Vec::with_capacity(stream.len);
+    async_std::task::block_on(async {
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            proc_outputs.push(item);
+        }
+    });
 
-        (block_output, proc_outputs)
+    (block_output, proc_outputs)
 }
 
 /// An asynchronous function that creates a scope and
@@ -258,19 +259,19 @@ pub fn scope_and_block
 /// gets forgotten, the implementation will still panic when
 /// the returned future is dropped without being fully
 /// driven.
-pub async unsafe fn scope_and_collect
-    <'a,
-     T: Send + 'static, R,
-     F: FnOnce(&mut Scope<'a, T>) -> R
-     >(f: F) -> (R, Vec<T>) {
+pub async unsafe fn scope_and_collect<
+        'a,
+    T: Send + 'static, R,
+    F: FnOnce(&mut Scope<'a, T>) -> R
+        >(f: F) -> (R, Vec<T>) {
 
-        let (mut stream, block_output) = scope(f);
+    let (mut stream, block_output) = scope(f);
 
-        let mut proc_outputs = Vec::with_capacity(stream.len);
-        while let Some(item) = futures::StreamExt::next(&mut stream).await {
-            proc_outputs.push(item);
-        }
-        (block_output, proc_outputs)
+    let mut proc_outputs = Vec::with_capacity(stream.len);
+    while let Some(item) = futures::StreamExt::next(&mut stream).await {
+        proc_outputs.push(item);
+    }
+    (block_output, proc_outputs)
 }
 
 /// An asynchronous function that creates a scope and
@@ -290,160 +291,20 @@ pub async unsafe fn scope_and_collect
 /// gets forgotten, the implementation will still panic when
 /// the returned future is dropped without being fully
 /// driven.
-pub async unsafe fn scope_and_iterate
-    <'a,
-     T: Send + 'static, R,
-     F: FnOnce(&mut Scope<'a, T>) -> R,
-     G: FnMut(T) -> H,
-     H: Future<Output=()>
-     >(f: F, g: G) -> R {
+pub async unsafe fn scope_and_iterate<
+        'a,
+    T: Send + 'static, R,
+    F: FnOnce(&mut Scope<'a, T>) -> R,
+    G: FnMut(T) -> H,
+    H: Future<Output=()>
+        >(f: F, g: G) -> R {
 
-        let (stream, block_output) = scope(f);
-        futures::StreamExt::for_each(stream, g).await;
-        block_output
+    let (stream, block_output) = scope(f);
+    futures::StreamExt::for_each(stream, g).await;
+    block_output
 
 }
 
-/// DEPRECATED: please use the function variant.
-///
-/// A macro that creates a scope and immediately awaits,
-/// _blocking the current thread_ for spawned futures to
-/// complete. The outputs of the futures are collected as a
-/// `Vec` and returned along with the output of the block.
-///
-/// # Safety
-///
-/// This macro is safe to the best of our understanding.
-#[macro_export]
-macro_rules! scope_and_block {
-    ($fn: expr) => {{
-        let (mut stream, block_output) = {
-            unsafe { $crate::scope($fn) }
-        };
-
-        let mut proc_outputs = Vec::with_capacity(stream.len);
-        async_std::task::block_on(async {
-            while let Some(item) = futures::StreamExt::next(&mut stream).await {
-                proc_outputs.push(item);
-            }
-        });
-
-        (block_output, proc_outputs)
-    }}
-}
-
-/// DEPRECATED: please use the function variant.
-///
-/// A macro that creates a scope and immediately awaits the
-/// stream. The outputs of the futures are collected as a
-/// `Vec` and returned along with the output of the block.
-/// This macro _must be invoked_ within an async block.
-///
-/// # Safety This macro is _not completely safe_: please see
-/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-/// The caller must ensure the enclosing async block (and
-/// it's stack) does not collapse before the macro completes
-/// driving the stream. However, unless the enclosing future
-/// gets forgotten, the implementation will still panic when
-/// the returned future is dropped without being fully
-/// driven.
-#[macro_export]
-macro_rules! unsafe_scope_and_collect {
-    ($fn: expr) => {{
-        let (mut stream, block_output) = {
-            unsafe { $crate::scope($fn) }
-        };
-        let mut proc_outputs = Vec::with_capacity(stream.len);
-        while let Some(item) = futures::StreamExt::next(&mut stream).await {
-            proc_outputs.push(item);
-        }
-        (block_output, proc_outputs)
-    }}
-}
-
-/// DEPRECATED: please use the function variant.
-///
-/// A macro that creates a scope and immediately awaits the
-/// stream, and sends it through an FnMut. It takes two
-/// args, the first that spawns the futures, and the second
-/// is the function to call on the stream. This macro _must be
-/// invoked_ within an async block.
-///
-/// # Safety This macro is _not completely safe_: please see
-/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-/// The caller must ensure the enclosing async block (and
-/// it's stack) does not collapse before the macro completes
-/// driving the stream. However, unless the enclosing future
-/// gets forgotten, the implementation will still panic when
-/// the returned future is dropped without being fully
-/// driven.
-#[macro_export]
-macro_rules! unsafe_scope_and_iterate {
-    ($fn: expr, $iter_fn: expr) => {{
-        let (stream, block_output) = {
-            unsafe { $crate::scope($fn) }
-        };
-        futures::StreamExt::for_each(stream, $iter_fn).await;
-        block_output
-    }}
-}
-
-/// A stream wrapper that ensures the underlying stream is
-/// driven to completion before being dropped. The
-/// implementation panics if the stream is incomplete.
-pub struct VerifiedStream<'a, S>{
-    stream: S,
-    pub done: bool,
-    pub len: usize,
-    _marker: PhantomData<&'a ()>,
-}
-
-impl<'a, I: std::future::Future>
-From<FuturesOrdered<I>> for VerifiedStream<'a, FuturesOrdered<I>> {
-    fn from(stream: FuturesOrdered<I>)
-            -> VerifiedStream<'a, FuturesOrdered<I>> {
-        VerifiedStream {
-            len: stream.len(),
-            done: false,
-            _marker: PhantomData,
-            stream,
-        }
-    }
-}
-
-impl<'a, I, S: Stream<Item=I>> VerifiedStream<'a, S> {
-    fn stream(self: Pin<&mut Self>) -> Pin<&mut S> {
-        // Only for projection in `poll_next`.
-        unsafe { self.map_unchecked_mut(|o| &mut o.stream) }
-    }
-
-    fn done(self: Pin<&mut Self>) -> &mut bool {
-        // Only for projection in `poll_next`.
-        unsafe { &mut self.get_unchecked_mut().done }
-    }
-}
-
-impl<'a, T> Drop for VerifiedStream<'a, T> {
-    fn drop(&mut self) {
-        if !self.done {
-            panic!("Scoped future streams must be run to completion");
-        }
-    }
-}
-
-impl<'a, I, T: Stream<Item=I>> Stream for VerifiedStream<'a, T> {
-    type Item = I;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context)
-                 -> Poll<Option<Self::Item>> {
-        let inner = self.as_mut().stream();
-        let poll = inner.poll_next(cx);
-        if poll.is_ready() {
-            *(self.done()) = true;
-        }
-        poll
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -576,9 +437,7 @@ mod tests {
             let shared_ref = &mut shared;
 
             let mut fut = Box::pin(
-                // Change next line to below for panic.
-                // unsafe { crate::scope_and_collect(|scope| {
-                async { crate::scope_and_block(|scope| {
+                unsafe { crate::scope_and_collect(|scope| {
                     scope.spawn(async {
                         assert!(future::timeout(
                             Duration::from_millis(100),
@@ -588,9 +447,10 @@ mod tests {
                     });
                 })}
             );
-            #[allow(unused_must_use)]
             let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
-            std::mem::forget(fut);
+
+            // Uncomment this line for panic.
+            // std::mem::forget(fut);
         }
 
         inner().await;
