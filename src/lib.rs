@@ -1,4 +1,3 @@
-#![feature(specialization)]
 //! Enables controlled spawning of non-`'static` futures
 //! when using the [async-std][async_std] executor. Note
 //! that this idea is similar to `crossbeam::scope`, and
@@ -8,8 +7,7 @@
 //!
 //! Executors like async_std, tokio, etc. support spawning
 //! `'static` futures onto a thread-pool. However, it is
-//! often useful to spawn a stream of futures that may not
-//! all be `'static`.
+//! often useful to spawn futures that may not be `'static`.
 //!
 //! While the future combinators such as
 //! [`for_each_concurrent`][for_each_concurrent] offer
@@ -39,7 +37,7 @@
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = crate::scope_and_block(|s| {
+//!     let (foo, outputs) = async_scoped::scope_and_block(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
@@ -57,57 +55,46 @@
 //! thread in order to guarantee safety. We also provide an
 //! unsafe `scope_and_collect`, which is asynchronous, and
 //! does not block the current thread. However, the user
-//! should ensure that the future that calls this function
-//! is not cancelled before all the spawned futures are
-//! driven to completion.
+//! should ensure that the returned future is not forgetten
+//! before being driven to completion.
 //!
 //! ## Safety Considerations
 //!
 //! The [`scope`][scope] API provided in this crate is
-//! inherently unsafe. Here, we list the key reasons for
-//! unsafety, towards identifying a safe usage (facilitated
-//! _only_ by [`scope_and_block`][scope_and_block] function).
+//! unsafe as it is possible to `forget` the stream received
+//! from the API without driving it to completion. The only
+//! completely (without any additional assumptions) safe API
+//! is the [`scope_and_block`][scope_and_block] function,
+//! which _blocks the current thread_ until all spawned
+//! futures complete.
 //!
-//! 1. Since safe Rust allows [`forget`][forget]-ting the
-//!    returned [`Stream`][Stream], the onus of actually
-//!    driving it to completion is on the user. Thus the
-//!    [`scope`][scope] function is inherently unsafe.
-//!
-//! 2. The spawned future _must be_ dropped immediately
-//!    after completion as it may contain references that
-//!    are soon to expire. This is the behaviour of
-//!    [async-std][async-std], and the safety of the API
-//!    here relies upon it.
-//!
-//! 3. The parent future hosting the values referred to by
-//!    the spawned futures must not be moved while the
-//!    spawned futures are running. To the best of our
-//!    understanding, the compiler should deduce that an
-//!    async function that uses [`scope`][scope] is
-//!    [`!Unpin`][!Unpin].
-//!
-//! 4. The [`Task`][Task] containing the parent Stream must
-//!    not drop the future before completion. This is
-//!    generally true, but must hold even if another
-//!    associated future (running in the same Task) panics!
-//!    Again, we hope this will not happen within
-//!    [`poll`][poll] because of above [`!Unpin`][!Unpin]
-//!    considerations.
+//! The [`scope_and_block`][scope_and_block] may not be
+//! convenient in an asynchronous setting. In this case, the
+//! [`scope_and_collect`][scope_and_collect] API may be
+//! used. Care must be taken to ensure the returned future
+//! is not forgotten before being driven to completion. Note
+//! that dropping this future will lead to it being driven
+//! to completion, while blocking the current thread to
+//! ensure safety. However, it is unsafe to forget this
+//! future before it is fully driven.
 //!
 //! ## Implementation
 //!
 //! Our current implementation simply uses _unsafe_ glue to
-//! actually spawn the futures. Then, it records the
-//! lifetime of the futures in the returned
-//! [`Stream`][Stream] object.
+//! `transmute` the lifetime, to actually spawn the futures
+//! in the executor. The original lifetime is recorded in
+//! the `Scope` and hence the returned
+//! [stream][VerifiedStream] object. This allows the
+//! compiler to enforce the necessary lifetime requirements
+//! as long as this returned stream is not forgotten.
 //!
-//! Currently, for soundness, we panic! if the stream is
-//! dropped before it is fully driven. Another option (not
-//! implemented here), may be to drive the stream using a
-//! current-thread executor inside the [`Drop`][Drop] impl.
+//! For soundness, we drive the stream to completion in the
+//! [`Drop`][Drop] impl. The current thread is blocked until
+//! the stream is fully driven.
 //!
 //! Unfortunately, since the [`std::mem::forget`][forget]
-//! method is safe, the API here is _inherently unsafe_.
+//! method is allowed in safe Rust, the purely asynchronous
+//! API here is _inherently unsafe_.
 //!
 //! [async-std]: async_std
 //! [poll]: std::futures::Future::poll
@@ -119,14 +106,22 @@ use futures::{Future, FutureExt};
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use async_std::task::JoinHandle;
+use async_std::sync::RwLock;
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+use std::task::Waker;
 
 mod verified_stream;
 pub use verified_stream::VerifiedStream;
 
+mod cancellable_future;
+pub use cancellable_future::CancellableFuture;
+
 /// A scope to allow controlled spawning of non 'static
 /// futures.
 pub struct Scope<'a, T: Send + 'static> {
+    lock: Arc<RwLock<bool>>,
+    read_wakers: Arc<Mutex<Vec<Waker>>>,
     futs: FuturesOrdered<JoinHandle<T>>,
     _marker: PhantomData<fn(&'a  ())>
 }
@@ -138,16 +133,16 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
     /// which have to be manually driven to completion.
     pub unsafe fn create() -> Self {
         Scope{
+            lock: Arc::new(RwLock::new(true)),
+            read_wakers: Arc::new(Mutex::new(Vec::new())),
             futs: FuturesOrdered::new(),
             _marker: PhantomData,
         }
     }
 
-    /// Spawn a future with `async_std::task::spawn`
-    ///
-    /// The future is expected to be driven to completion
-    /// before 'a expires. Otherwise, the stream returned by
-    /// `scope` function will panic!
+    /// Spawn a future with `async_std::task::spawn`. The
+    /// future is expected to be driven to completion before
+    /// 'a expires.
     ///
     /// # Safety
     ///
@@ -161,13 +156,30 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         self.futs.push(handle);
     }
 
+    /// Spawn a cancellable future with `async_std::task::spawn`
+    ///
+    /// The future is may be cancelled if the
+    /// `VerifiedStream` returned by the calling `Scope` is
+    /// dropped pre-maturely.
+    ///
+    /// # Safety
+    ///
+    /// This function is safe as it is unsafe to create a
+    /// `Scope` object. The creator of the object is
+    /// expected to enforce the lifetime guarantees.
+    pub fn spawn_cancellable<F: Future<Output=T> + Send + 'a,
+                             Fu: FnOnce() -> T + Send + 'a>(&mut self, f: F, cancellation: Fu) {
+        self.spawn(CancellableFuture::new(self.lock.clone(), self.read_wakers.clone(), f, cancellation))
+    }
+
     /// Convert `Scope` into a `Stream` of spawned future outputs.
     ///
-    /// This function is useful when using Scope in an async
+    /// This function is useful when spawning in an async
     /// context. This allows, for instance, to apply
     /// back-pressure.
     pub fn into_stream(self) -> VerifiedStream<'a, FuturesOrdered<JoinHandle<T>>> {
-        self.futs.into()
+        let len = self.futs.len();
+        VerifiedStream::new(self.futs, len, self.lock, self.read_wakers)
     }
 }
 
@@ -178,17 +190,19 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
 ///
 /// # Returns
 ///
-/// The returned value implements `Stream` and is expected
-/// to be driven completely before being dropped. The values
-/// returned are either the output of the future, or the
-/// stack-trace if it panicked.
+/// The function returns a tuple of `VerifiedStream`, and
+/// the return value of the block passed to it. The returned
+/// stream and is expected to be driven completely before
+/// being forgotten. Dropping this stream causes the stream
+/// to be driven _while blocking the current thread_. The
+/// values returned from the stream are the output of the
+/// futures spawned.
 ///
 /// # Safety
 ///
-/// The returned stream is expected to be run to completion.
-/// For safety, the returned stream panics if dropped before
-/// run to completion. It is also marked as `!Unpin` to help
-/// mark the parent future which drives it also thus.
+/// The returned stream is expected to be run to completion
+/// before being forgotten. Dropping it is okay, but blocks
+/// the current thread until all spawned futures complete.
 pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>(
     f: F
 ) -> (VerifiedStream<'a, FuturesOrdered<JoinHandle<T>>>, R) {
@@ -246,19 +260,20 @@ pub fn scope_and_block<
 /// An asynchronous function that creates a scope and
 /// immediately awaits the stream. The outputs of the
 /// futures are collected as a `Vec` and returned along with
-/// the output of the block. This macro _must be invoked_
-/// within an async block.
+/// the output of the block.
 ///
 /// # Safety
 ///
-/// This macro is _not completely safe_: please see
-/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-/// The caller must ensure the enclosing async block (and
-/// it's stack) does not collapse before the macro completes
-/// driving the stream. However, unless the enclosing future
-/// gets forgotten, the implementation will still panic when
-/// the returned future is dropped without being fully
-/// driven.
+/// This function is _not completely safe_: please see
+/// [tests.rs][tests-src] for a cancellation test-case that
+/// can lead to invalid memory access.
+///
+/// The caller must ensure that the lifetime 'a is valid
+/// until the returned future is fully driven. Dropping it
+/// is okay, but blocks the current thread until all spawned
+/// futures complete.
+///
+/// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
 pub async unsafe fn scope_and_collect<
         'a,
     T: Send + 'static, R,
@@ -283,14 +298,16 @@ pub async unsafe fn scope_and_collect<
 ///
 /// # Safety
 ///
-/// This macro is _not completely safe_: please see
-/// https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-/// The caller must ensure the enclosing async block (and
-/// it's stack) does not collapse before the macro completes
-/// driving the stream. However, unless the enclosing future
-/// gets forgotten, the implementation will still panic when
-/// the returned future is dropped without being fully
-/// driven.
+/// This function is _not completely safe_: please see
+/// [tests.rs][tests-src] for a cancellation test-case that
+/// can lead to invalid memory access.
+///
+/// The caller must ensure that the lifetime 'a is valid
+/// until the returned future is fully driven. Dropping it
+/// is okay, but blocks the current thread until all spawned
+/// futures complete.
+///
+/// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
 pub async unsafe fn scope_and_iterate<
         'a,
     T: Send + 'static, R,
@@ -305,180 +322,5 @@ pub async unsafe fn scope_and_iterate<
 
 }
 
-
 #[cfg(test)]
-mod tests {
-    #[async_std::test]
-    async fn scope() {
-        let not_copy = String::from("hello world!");
-        let not_copy_ref = &not_copy;
-
-        let (stream, _) = unsafe {crate::scope(|s| {
-            for _ in 0..10 {
-                let proc = || async move {
-                    assert_eq!(not_copy_ref, "hello world!");
-                };
-                s.spawn(proc());
-            }
-        })};
-
-        // Uncomment this for compile error
-        // std::mem::drop(not_copy);
-
-        use futures::StreamExt;
-        let count = stream.collect::<Vec<_>>().await.len();
-
-        // Drop here is okay, as stream has been consumed.
-        std::mem::drop(not_copy);
-        assert_eq!(count, 10);
-    }
-
-    #[async_std::test]
-    async fn scope_async() {
-        let not_copy = String::from("hello world!");
-        let not_copy_ref = &not_copy;
-
-        let stream = unsafe {
-            use async_std::future::{timeout, pending};
-            use std::time::Duration;
-            let mut s = crate::Scope::create();
-            for _ in 0..10 {
-                let proc = || async move {
-                    assert_eq!(not_copy_ref, "hello world!");
-                };
-                s.spawn(proc());
-                let _ = timeout(
-                    Duration::from_millis(10),
-                    pending::<()>(),
-                ).await;
-            }
-            s.into_stream()
-        };
-
-        // Uncomment this for compile error
-        // std::mem::drop(not_copy);
-
-        use futures::StreamExt;
-        let count = stream.collect::<Vec<_>>().await.len();
-
-        // Drop here is okay, as stream has been consumed.
-        std::mem::drop(not_copy);
-        assert_eq!(count, 10);
-    }
-
-
-    #[async_std::test]
-    async fn scope_and_collect() {
-        let not_copy = String::from("hello world!");
-        let not_copy_ref = &not_copy;
-
-        let (_, vals) = unsafe { crate::scope_and_collect(|s| {
-            for _ in 0..10 {
-                let proc = || async {
-                    assert_eq!(not_copy_ref, "hello world!");
-                };
-                s.spawn(proc());
-            }
-        }) }.await;
-
-        assert_eq!(vals.len(), 10);
-    }
-
-    #[async_std::test]
-    async fn scope_and_iterate() {
-        let not_copy = String::from("hello world!");
-        let not_copy_ref = &not_copy;
-        let mut count = 0;
-
-        unsafe { crate::scope_and_iterate(|s| {
-            for _ in 0..10 {
-                let proc = || async {
-                    assert_eq!(not_copy_ref, "hello world!");
-                };
-                s.spawn(proc());
-            }
-        }, |_| {
-            count += 1;
-            futures::future::ready(())
-        }) }.await;
-
-        assert_eq!(count, 10);
-    }
-
-    #[async_std::test]
-    async fn scope_and_block() {
-        let not_copy = String::from("hello world!");
-        let not_copy_ref = &not_copy;
-
-        let ((), vals) = crate::scope_and_block(|s| {
-            for _ in 0..10 {
-                let proc = || async {
-                    assert_eq!(not_copy_ref, "hello world!");
-                };
-                s.spawn(proc());
-            }
-        });
-
-        assert_eq!(vals.len(), 10);
-    }
-
-    /// This is a simplified version of the soundness bug
-    /// pointed out on reddit. Here, we test that it does
-    /// not happen when using the `scope_and_block`
-    /// function. Using `scope_and_collect` here should
-    /// trigger a panic.
-    #[async_std::test]
-    async fn cancellation_soundness() {
-        use async_std::future;
-        use std::time::Duration;
-
-        async fn inner() {
-            let mut shared = true;
-            let shared_ref = &mut shared;
-
-            let mut fut = Box::pin(
-                unsafe { crate::scope_and_collect(|scope| {
-                    scope.spawn(async {
-                        assert!(future::timeout(
-                            Duration::from_millis(100),
-                            future::pending::<()>(),
-                        ).await.is_err());
-                        assert!(*shared_ref);
-                    });
-                })}
-            );
-            let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
-
-            // Uncomment this line for panic.
-            // std::mem::forget(fut);
-        }
-
-        inner().await;
-        assert!(future::timeout(Duration::from_millis(100),
-                        future::pending::<()>()).await.is_err());
-
-    }
-
-    // Mutability test: should fail to compile.
-    // TODO: use compiletest_rs
-    // #[async_std::test]
-    // async fn mutating_scope() {
-    //     let mut not_copy = String::from("hello world!");
-    //     let not_copy_ref = &mut not_copy;
-    //     let mut count = 0;
-
-    //     crate::scope_and_iterate!(|s| {
-    //         for _ in 0..10 {
-    //             let proc = || async {
-    //                 not_copy_ref.push('.');
-    //             };
-    //             s.spawn(proc()); //~ ERROR
-    //         }
-    //     }, |_| {
-    //         count += 1;
-    //         futures::future::ready(())
-    //     });
-
-    //     assert_eq!(count, 10);
-    // }
-}
+mod tests;
