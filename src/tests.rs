@@ -42,7 +42,7 @@ async fn scope_async() {
                 pending::<()>(),
             ).await;
         }
-        s.into_stream()
+        s
     };
 
     // Uncomment this for compile error
