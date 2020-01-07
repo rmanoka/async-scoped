@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use futures::Stream;
 use futures::{Future, FutureExt};
 use futures::future::BoxFuture;
-use futures::stream::FuturesOrdered;
+use futures::stream::FuturesUnordered;
 use async_std::task::JoinHandle;
 use async_std::sync::RwLock;
 
@@ -27,7 +27,7 @@ pub struct Scope<'a, T: Send + 'static> {
     remaining: usize,
     lock: Arc<RwLock<bool>>,
     read_wakers: Arc<Mutex<HashMap<usize, Waker>>>,
-    futs: FuturesOrdered<JoinHandle<T>>,
+    futs: FuturesUnordered<JoinHandle<T>>,
     _marker: PhantomData<fn(&'a  ())>
 }
 
@@ -43,7 +43,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
             remaining: 0,
             lock: Arc::new(RwLock::new(true)),
             read_wakers: Arc::new(Mutex::new(HashMap::new())),
-            futs: FuturesOrdered::new(),
+            futs: FuturesUnordered::new(),
             _marker: PhantomData,
         }
     }
@@ -106,7 +106,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         proc_outputs
     }
 
-    fn stream(self: Pin<&mut Self>) -> Pin<&mut FuturesOrdered<JoinHandle<T>>> {
+    fn stream(self: Pin<&mut Self>) -> Pin<&mut FuturesUnordered<JoinHandle<T>>> {
         // Only for projection in `poll_next`.
         unsafe { self.map_unchecked_mut(|o| &mut o.futs) }
     }
