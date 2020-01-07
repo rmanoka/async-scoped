@@ -105,17 +105,17 @@ next poll.
 
 ## Safety Considerations
 
-The [`scope`][scope] API provided in this crate is
+The `scope` API provided in this crate is
 unsafe as it is possible to `forget` the stream received
 from the API without driving it to completion. The only
 completely (without any additional assumptions) safe API
-is the [`scope_and_block`][scope_and_block] function,
+is the `scope_and_block` function,
 which _blocks the current thread_ until all spawned
 futures complete.
 
-The [`scope_and_block`][scope_and_block] may not be
+The `scope_and_block` may not be
 convenient in an asynchronous setting. In this case, the
-[`scope_and_collect`][scope_and_collect] API may be
+`scope_and_collect` API may be
 used. Care must be taken to ensure the returned future
 is not forgotten before being driven to completion. Note
 that dropping this future will lead to it being driven
@@ -133,12 +133,12 @@ necessary lifetime requirements as long as this returned
 stream is not forgotten.
 
 For soundness, we drive the stream to completion in the
-[`Drop`][Drop] impl. The current thread is blocked until
-the stream is fully driven.
+`Drop` impl. The current thread is blocked until the stream
+is fully driven.
 
-Unfortunately, since the [`std::mem::forget`][forget]
-method is allowed in safe Rust, the purely asynchronous
-API here is _inherently unsafe_.
+Unfortunately, since the `std::mem::forget` method is
+allowed in safe Rust, the purely asynchronous API here is
+_inherently unsafe_.
 
 ### Efficiency
 
@@ -163,8 +163,7 @@ hope could be further optimized.
 
 Licensed under either of [Apache License, Version
 2.0](//www.apache.org/licenses/LICENSE-2.0) or [MIT
-license](//opensource.org/licenses/MIT) at your
-option.
+license](//opensource.org/licenses/MIT) at your option.
 
 Unless you explicitly state otherwise, any contribution
 intentionally submitted for inclusion in this crate by you,
