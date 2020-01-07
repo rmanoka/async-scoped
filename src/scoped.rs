@@ -1,16 +1,17 @@
-use std::task::Poll;
+use std::task::{Poll, Context, Waker};
 use std::pin::Pin;
-use std::task::Context;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use std::task::Waker;
 use std::collections::HashMap;
-use futures::Stream;
-use futures::{Future, FutureExt};
+
+use futures::{Stream, Future, FutureExt};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
+
 use async_std::task::JoinHandle;
 use async_std::sync::RwLock;
+
+use pin_project::{pin_project, pinned_drop};
 
 /// A scope to allow controlled spawning of non 'static
 /// futures. Futures can be spawned using `spawn` or
@@ -21,14 +22,16 @@ use async_std::sync::RwLock;
 /// This type uses `Drop` implementation to guarantee
 /// safety. It is not safe to forget this object unless it
 /// is driven to completion.
-pub struct Scope<'a, T: Send + 'static> {
+#[pin_project(PinnedDrop)]
+pub struct Scope<'a, T> {
     done: bool,
     len: usize,
     remaining: usize,
     lock: Arc<RwLock<bool>>,
     read_wakers: Arc<Mutex<HashMap<usize, Waker>>>,
+    #[pin]
     futs: FuturesUnordered<JoinHandle<T>>,
-    _marker: PhantomData<fn(&'a  ())>
+    _marker: PhantomData<fn(&'a ())>
 }
 
 impl<'a, T: Send + 'static> Scope<'a, T> {
@@ -51,7 +54,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
     /// Spawn a future with `async_std::task::spawn`. The
     /// future is expected to be driven to completion before
     /// 'a expires.
-    #[inline] pub fn spawn<F: Future<Output=T> + Send + 'a>(&mut self, f: F) {
+    pub fn spawn<F: Future<Output=T> + Send + 'a>(&mut self, f: F) {
         let handle = async_std::task::spawn(unsafe {
             std::mem::transmute::<_, BoxFuture<'static, T>>(f.boxed())
         });
@@ -65,12 +68,15 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
     /// The future is cancelled if the `Scope` is dropped
     /// pre-maturely. It can also be cancelled by explicitly
     /// calling (and awaiting) the `cancel` method.
+    #[inline]
     pub fn spawn_cancellable<F: Future<Output=T> + Send + 'a,
                              Fu: FnOnce() -> T + Send + 'a>(&mut self, f: F, cancellation: Fu) {
         use super::CancellableFuture;
         self.spawn(CancellableFuture::new(self.len, self.lock.clone(), self.read_wakers.clone(), f, cancellation))
     }
+}
 
+impl<'a, T> Scope<'a, T> {
     /// Cancel all futures spawned with cancellation.
     pub async fn cancel(&self) {
         // Mark scope as being cancelled.
@@ -105,30 +111,20 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
 
         proc_outputs
     }
-
-    fn stream(self: Pin<&mut Self>) -> Pin<&mut FuturesUnordered<JoinHandle<T>>> {
-        // Only for projection in `poll_next`.
-        unsafe { self.map_unchecked_mut(|o| &mut o.futs) }
-    }
-
-    fn done(self: Pin<&mut Self>) -> &mut bool {
-        // Only for projection in `poll_next`.
-        unsafe { &mut self.get_unchecked_mut().done }
-    }
 }
 
-impl<'a, T: Send + 'static> Stream for Scope<'a, T> {
+impl<'a, T> Stream for Scope<'a, T> {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context)
                  -> Poll<Option<Self::Item>> {
 
-        let inner = self.as_mut().stream();
-        let poll = inner.poll_next(cx);
+        let this = self.project();
+        let poll = this.futs.poll_next(cx);
         if let Poll::Ready(None) = poll {
-            *(self.done()) = true;
+            *this.done = true;
         } else if poll.is_ready() {
-            self.remaining -= 1;
+            *this.remaining -= 1;
         }
         poll
 
@@ -139,8 +135,9 @@ impl<'a, T: Send + 'static> Stream for Scope<'a, T> {
     }
 }
 
-impl<'a, T: Send + 'static> Drop for Scope<'a, T> {
-    fn drop(&mut self) {
+#[pinned_drop]
+impl<'a, T> PinnedDrop for Scope<'a, T> {
+    fn drop(mut self: Pin<&mut Self>) {
         if !self.done {
             async_std::task::block_on(async {
                 self.cancel().await;
