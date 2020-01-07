@@ -113,7 +113,7 @@ async fn cancellation_soundness() {
             unsafe { crate::scope_and_collect(|scope| {
                 scope.spawn_cancellable(async {
                     assert!(future::timeout(
-                        Duration::from_millis(100),
+                        Duration::from_millis(500),
                         future::pending::<()>(),
                     ).await.is_err());
 
@@ -141,9 +141,39 @@ async fn cancellation_soundness() {
 
     // This timeout allows any (possible) invalid memory
     // access to actually take place.
-    assert!(future::timeout(Duration::from_millis(200),
+    assert!(future::timeout(Duration::from_millis(600),
                             future::pending::<()>()).await.is_err());
 
+}
+
+/// This test is resource consuming and ignored by default
+#[async_std::test]
+#[ignore]
+async fn backpressure() {
+    let mut s = unsafe { crate::Scope::create() };
+    let limit = 0x10;
+    for i in 0..0x100 {
+        s.spawn(async {
+            // Allocate a large array (256 MB)
+            let blob = vec![42u8; 0x10000000];
+
+            // Spend a lot of time on it asynchronously
+            use async_std::future;
+            use std::time::Duration;
+            let _ = future::timeout(
+                Duration::from_millis(100),
+                future::pending::<()>()
+            ).await;
+
+            std::mem::drop(blob);
+        });
+
+        while s.remaining() > limit {
+            use futures::StreamExt;
+            s.next().await;
+        }
+        eprintln!("Spawned {} futures", i);
+    }
 }
 
 // Mutability test: should fail to compile.

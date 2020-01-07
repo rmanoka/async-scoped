@@ -18,9 +18,8 @@
 //! ## Scope API
 //!
 //! We propose an API similar to
-//! [`crossbeam::scope`](crossbeam::scope) to allow
-//! controlled spawning of futures that are not `'static`.
-//! The key function is:
+//! [`crossbeam::scope`](crossbeam::scope) to allow spawning
+//! futures that are not `'static`. The key API is approximately:
 //!
 //! ``` rust, ignore
 //! pub unsafe fn scope<'a, T: Send + 'static,
@@ -30,7 +29,9 @@
 //! }
 //! ```
 //!
-//! This function is used as follows:
+//! See [`scope`][scope] for the exact definition, and
+//! safety guidelines. The simplest and safest API is
+//! [`scope_and_block`][scope_and_block], used as follows:
 //!
 //! ``` rust
 //! #[async_std::test]
@@ -51,23 +52,26 @@
 //! }
 //! ```
 //!
-//! The `scope_and_block` function above blocks the current
-//! thread in order to guarantee safety. We also provide an
-//! unsafe `scope_and_collect`, which is asynchronous, and
-//! does not block the current thread. However, the user
-//! should ensure that the returned future _is not
-//! forgetten_ before being driven to completion.
+//! The [`scope_and_block`][scope_and_block] function above
+//! blocks the current thread until all spawned futures are
+//! driven in order to guarantee safety.
+//!
+//! We also provide an unsafe
+//! [`scope_and_collect`][scope_and_collect], which is
+//! asynchronous, and does not block the current thread.
+//! However, the user should ensure that the returned future
+//! _is not forgetten_ before being driven to completion.
 //!
 //! ## Cancellation
 //!
 //! To support cancellation, `Scope` provides a
-//! `spawn_cancellable` which wraps a future to make it
-//! cancellable. When a `Scope` is dropped, (or if `cancel`
-//! method is invoked), all the cancellable futures are
-//! scheduled for cancellation. In the next poll of the
-//! futures, they are dropped and a default value (provided
-//! by a closure during spawn) is returned as the output of
-//! the future.
+//! [`spawn_cancellable`][spawn_cancellable] which wraps a
+//! future to make it cancellable. When a `Scope` is
+//! dropped, (or if `cancel` method is invoked), all the
+//! cancellable futures are scheduled for cancellation. In
+//! the next poll of the futures, they are dropped and a
+//! default value (provided by a closure during spawn) is
+//! returned as the output of the future.
 //!
 //! Note that cancellation requires some reasonable
 //! behaviour from the future and futures that do not return
@@ -88,10 +92,11 @@
 //! convenient in an asynchronous setting. In this case, the
 //! [`scope_and_collect`][scope_and_collect] API may be
 //! used. Care must be taken to ensure the returned future
-//! is not forgotten before being driven to completion. Note
-//! that dropping this future will lead to it being driven
-//! to completion, while blocking the current thread to
-//! ensure safety. However, it is unsafe to forget this
+//! is not forgotten before being driven to completion.
+//!
+//! Note that dropping this future will lead to it being
+//! driven to completion, while blocking the current thread
+//! to ensure safety. However, it is unsafe to forget this
 //! future before it is fully driven.
 //!
 //! ## Implementation

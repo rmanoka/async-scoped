@@ -90,6 +90,9 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
     /// Total number of futures spawned in this scope.
     pub fn len(&self) -> usize { self.len }
 
+    /// Number of futures remaining in this scope.
+    pub fn remaining(&self) -> usize { self.remaining }
+
     /// A slighly optimized `collect` on the stream. Also
     /// useful when we can not move out of self.
     pub async fn collect(&mut self) -> Vec<T> {
