@@ -1,22 +1,30 @@
 use std::task::Poll;
 use std::pin::Pin;
 use std::task::Context;
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+use std::task::Waker;
+use std::collections::HashMap;
 use futures::Stream;
 use futures::{Future, FutureExt};
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use async_std::task::JoinHandle;
 use async_std::sync::RwLock;
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
-use std::task::Waker;
-use std::collections::HashMap;
 
 /// A scope to allow controlled spawning of non 'static
-/// futures.
+/// futures. Futures can be spawned using `spawn` or
+/// `spawn_cancellable` methods.
+///
+/// # Safety
+///
+/// This type uses `Drop` implementation to guarantee
+/// safety. It is not safe to forget this object unless it
+/// is driven to completion.
 pub struct Scope<'a, T: Send + 'static> {
     done: bool,
     len: usize,
+    remaining: usize,
     lock: Arc<RwLock<bool>>,
     read_wakers: Arc<Mutex<HashMap<usize, Waker>>>,
     futs: FuturesOrdered<JoinHandle<T>>,
@@ -32,6 +40,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         Scope{
             done: false,
             len: 0,
+            remaining: 0,
             lock: Arc::new(RwLock::new(true)),
             read_wakers: Arc::new(Mutex::new(HashMap::new())),
             futs: FuturesOrdered::new(),
@@ -48,6 +57,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         });
         self.futs.push(handle);
         self.len += 1;
+        self.remaining += 1;
     }
 
     /// Spawn a cancellable future with `async_std::task::spawn`
@@ -77,6 +87,22 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         list.clear();
     }
 
+    /// Total number of futures spawned in this scope.
+    pub fn len(&self) -> usize { self.len }
+
+    /// A slighly optimized `collect` on the stream. Also
+    /// useful when we can not move out of self.
+    pub async fn collect(&mut self) -> Vec<T> {
+        let mut proc_outputs = Vec::with_capacity(self.remaining);
+
+        use futures::StreamExt;
+        while let Some(item) = self.next().await {
+            proc_outputs.push(item);
+        }
+
+        proc_outputs
+    }
+
     fn stream(self: Pin<&mut Self>) -> Pin<&mut FuturesOrdered<JoinHandle<T>>> {
         // Only for projection in `poll_next`.
         unsafe { self.map_unchecked_mut(|o| &mut o.futs) }
@@ -86,9 +112,6 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
         // Only for projection in `poll_next`.
         unsafe { &mut self.get_unchecked_mut().done }
     }
-
-    /// Total number of futures spawned in this scope.
-    pub fn len(&self) -> usize { self.len }
 }
 
 impl<'a, T: Send + 'static> Stream for Scope<'a, T> {
@@ -101,25 +124,24 @@ impl<'a, T: Send + 'static> Stream for Scope<'a, T> {
         let poll = inner.poll_next(cx);
         if let Poll::Ready(None) = poll {
             *(self.done()) = true;
+        } else if poll.is_ready() {
+            self.remaining -= 1;
         }
         poll
 
     }
 
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
 }
 
 impl<'a, T: Send + 'static> Drop for Scope<'a, T> {
     fn drop(&mut self) {
         if !self.done {
             async_std::task::block_on(async {
-                // This is the destructor, so it is okay to pin from &mut
-                let mut pinned: Pin<&mut Self> = unsafe { Pin::new_unchecked(self) };
-                pinned.cancel().await;
-
-                // Await all the futures to be dropped.
-                use futures::StreamExt;
-                while let Some(_) = pinned.next().await {
-                }
+                self.cancel().await;
+                self.collect().await;
             });
         }
     }

@@ -1,4 +1,3 @@
-use std::future::Future;
 use crate::Scope;
 
 /// Creates a `Scope` to spawn non-'static futures. The
@@ -21,10 +20,10 @@ use crate::Scope;
 /// The returned stream is expected to be run to completion
 /// before being forgotten. Dropping it is okay, but blocks
 /// the current thread until all spawned futures complete.
-pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>(
-    f: F
-) -> (Scope<'a, T>, R) {
-
+pub unsafe fn scope<'a, T: Send + 'static, R,
+                    F: FnOnce(&mut Scope<'a, T>) -> R
+                    >(f: F) -> (Scope<'a, T>, R)
+{
     let mut scope = Scope::create();
     let op = f(&mut scope);
     (scope, op)
@@ -50,23 +49,12 @@ pub unsafe fn scope<'a, T: Send + 'static, R, F: FnOnce(&mut Scope<'a, T>) -> R>
 /// recursively spawned should have the same lifetime as the
 /// top-level scope, or there should not be any spurious
 /// future cancellations within the top level scope.
-pub fn scope_and_block<
-        'a,
-    T: Send + 'static, R,
-    F: FnOnce(&mut Scope<'a, T>) -> R
-        >(f: F) -> (R, Vec<T>) {
-
-    let (mut stream, block_output) = {
-        unsafe { scope(f) }
-    };
-
-    let mut proc_outputs = Vec::with_capacity(stream.len());
-    async_std::task::block_on(async {
-        while let Some(item) = futures::StreamExt::next(&mut stream).await {
-            proc_outputs.push(item);
-        }
-    });
-
+pub fn scope_and_block<'a, T: Send + 'static, R,
+                       F: FnOnce(&mut Scope<'a, T>) -> R
+                       >(f: F) -> (R, Vec<T>)
+{
+    let (mut stream, block_output) = unsafe {scope(f)};
+    let proc_outputs = async_std::task::block_on(stream.collect());
     (block_output, proc_outputs)
 }
 
@@ -88,51 +76,11 @@ pub fn scope_and_block<
 /// spawned futures complete.
 ///
 /// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
-pub async unsafe fn scope_and_collect<
-        'a,
-    T: Send + 'static, R,
-    F: FnOnce(&mut Scope<'a, T>) -> R
-        >(f: F) -> (R, Vec<T>) {
-
+pub async unsafe fn scope_and_collect<'a, T: Send + 'static, R,
+                                      F: FnOnce(&mut Scope<'a, T>) -> R
+                                      >(f: F) -> (R, Vec<T>)
+{
     let (mut stream, block_output) = scope(f);
-
-    let mut proc_outputs = Vec::with_capacity(stream.len());
-    while let Some(item) = futures::StreamExt::next(&mut stream).await {
-        proc_outputs.push(item);
-    }
+    let proc_outputs = stream.collect().await;
     (block_output, proc_outputs)
-}
-
-/// An asynchronous function that creates a scope and
-/// immediately awaits the stream, and sends it through an
-/// FnMut (using `futures::StreamExt::for_each`). It takes
-/// two args, the first that spawns the futures, and the
-/// second is the function to call on the stream. This macro
-/// _must be invoked_ within an async block.
-///
-/// # Safety
-///
-/// This function is _not completely safe_: please see
-/// `cancellation_soundness` in [tests.rs][tests-src] for a
-/// test-case that suggests how this can lead to invalid
-/// memory access if not dealt with care.
-///
-/// The caller must ensure that the lifetime 'a is valid
-/// until the returned future is fully driven. Dropping the
-/// future is okay, but blocks the current thread until all
-/// spawned futures complete.
-///
-/// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
-pub async unsafe fn scope_and_iterate<
-        'a,
-    T: Send + 'static, R,
-    F: FnOnce(&mut Scope<'a, T>) -> R,
-    G: FnMut(T) -> H,
-    H: Future<Output=()>
-        >(f: F, g: G) -> R {
-
-    let (stream, block_output) = scope(f);
-    futures::StreamExt::for_each(stream, g).await;
-    block_output
-
 }

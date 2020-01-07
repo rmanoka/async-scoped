@@ -9,8 +9,8 @@ use async_std::sync::RwLock;
 /// scope that spawned it. The future may be cancelled by
 /// calling `cancel` method or dropping the `Scope`.
 pub struct CancellableFuture<I, F: Future<Output=I>, Fu: FnOnce() -> I> {
-    lock: Arc<RwLock<bool>>,
     id: usize,
+    lock: Arc<RwLock<bool>>,
     read_wakers: Arc<Mutex<HashMap<usize, Waker>>>,
     fut: F,
     cancellation: Option<Fu>,
@@ -35,10 +35,13 @@ impl<I, F: Future<Output=I>, Fu: FnOnce() -> I> CancellableFuture<I, F, Fu> {
     }
 }
 
-impl<I, F: Future<Output=I>, Fu: FnOnce() -> I> Future for CancellableFuture<I, F, Fu> {
+impl<I, F: Future<Output=I>, Fu: FnOnce() -> I> Future
+    for CancellableFuture<I, F, Fu>
+{
     type Output = I;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context)
+            -> Poll<Self::Output> {
 
         let lock = self.lock.clone();
         let read_fut = lock.read();
@@ -55,7 +58,11 @@ impl<I, F: Future<Output=I>, Fu: FnOnce() -> I> Future for CancellableFuture<I, 
 
                 // Add the waker from context into read_wakers list
                 let mut map = this.read_wakers.lock().unwrap();
-                map.insert(this.id, cx.waker().clone());
+                if poll_result.is_ready() {
+                    map.remove(&this.id);
+                } else  {
+                    map.insert(this.id, cx.waker().clone());
+                }
 
                 // Ensure we drop read guard only after adding waker to list
                 std::mem::drop(guard);

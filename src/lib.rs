@@ -124,7 +124,7 @@ mod scoped;
 pub use scoped::Scope;
 
 mod usage;
-pub use usage::{scope, scope_and_block, scope_and_collect, scope_and_iterate};
+pub use usage::{scope, scope_and_block, scope_and_collect};
 
 #[cfg(test)]
 mod tests;

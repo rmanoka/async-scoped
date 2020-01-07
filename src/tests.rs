@@ -75,27 +75,6 @@ async fn scope_and_collect() {
 }
 
 #[async_std::test]
-async fn scope_and_iterate() {
-    let not_copy = String::from("hello world!");
-    let not_copy_ref = &not_copy;
-    let mut count = 0;
-
-    unsafe { crate::scope_and_iterate(|s| {
-        for _ in 0..10 {
-            let proc = || async {
-                assert_eq!(not_copy_ref, "hello world!");
-            };
-            s.spawn(proc());
-        }
-    }, |_| {
-        count += 1;
-        futures::future::ready(())
-    }) }.await;
-
-    assert_eq!(count, 10);
-}
-
-#[async_std::test]
 async fn scope_and_block() {
     let not_copy = String::from("hello world!");
     let not_copy_ref = &not_copy;
@@ -134,33 +113,35 @@ async fn cancellation_soundness() {
             unsafe { crate::scope_and_collect(|scope| {
                 scope.spawn_cancellable(async {
                     assert!(future::timeout(
-                        Duration::from_secs(2),
+                        Duration::from_millis(100),
                         future::pending::<()>(),
                     ).await.is_err());
+
+                    eprintln!("Trying to write to shared_ref");
+                    *shared_ref = false;
                     assert!(*shared_ref);
                 }, || ());
             })}
         );
         let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
 
-        // Uncomment this line for panic.
-        // std::mem::forget(fut);
-
         // Dropping explicitly to measure time taken to complete drop.
+        // Change the drop to forget for panic due to invalid mem. access.
         std::mem::drop(fut);
         let elapsed = start.elapsed().as_millis();
 
+
         // The cancelled future should have been polled
         // before the inner large timeout.
-        assert!(elapsed < 1000);
+        assert!(elapsed < 100);
         eprintln!("Elapsed: {}ms", start.elapsed().as_millis());
     }
 
     inner().await;
 
     // This timeout allows any (possible) invalid memory
-    // access to take place
-    assert!(future::timeout(Duration::from_millis(100),
+    // access to actually take place.
+    assert!(future::timeout(Duration::from_millis(200),
                             future::pending::<()>()).await.is_err());
 
 }
@@ -173,16 +154,13 @@ async fn cancellation_soundness() {
 //     let not_copy_ref = &mut not_copy;
 //     let mut count = 0;
 
-//     crate::scope_and_iterate!(|s| {
+//     crate::scope_and_block(|s| {
 //         for _ in 0..10 {
 //             let proc = || async {
 //                 not_copy_ref.push('.');
 //             };
 //             s.spawn(proc()); //~ ERROR
 //         }
-//     }, |_| {
-//         count += 1;
-//         futures::future::ready(())
 //     });
 
 //     assert_eq!(count, 10);
