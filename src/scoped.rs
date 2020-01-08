@@ -1,17 +1,16 @@
-use std::task::{Poll, Context, Waker};
+use std::task::{Poll, Context};
 use std::pin::Pin;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use futures::{Stream, Future, FutureExt};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 
 use async_std::task::JoinHandle;
-use async_std::sync::RwLock;
 
 use pin_project::{pin_project, pinned_drop};
+use crate::Cancellation;
 
 /// A scope to allow controlled spawning of non 'static
 /// futures. Futures can be spawned using `spawn` or
@@ -27,11 +26,12 @@ pub struct Scope<'a, T> {
     done: bool,
     len: usize,
     remaining: usize,
-    lock: Arc<RwLock<bool>>,
-    read_wakers: Arc<Mutex<HashMap<usize, Waker>>>,
+    cancellation: Arc<Cancellation>,
     #[pin]
     futs: FuturesUnordered<JoinHandle<T>>,
-    _marker: PhantomData<fn(&'a ())>
+
+    // Future proof against variance changes
+    _marker: PhantomData<fn(&'a ()) -> &'a ()>
 }
 
 impl<'a, T: Send + 'static> Scope<'a, T> {
@@ -44,8 +44,7 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
             done: false,
             len: 0,
             remaining: 0,
-            lock: Arc::new(RwLock::new(true)),
-            read_wakers: Arc::new(Mutex::new(HashMap::new())),
+            cancellation: Arc::new(Cancellation::new()),
             futs: FuturesUnordered::new(),
             _marker: PhantomData,
         }
@@ -70,33 +69,28 @@ impl<'a, T: Send + 'static> Scope<'a, T> {
     /// calling (and awaiting) the `cancel` method.
     #[inline]
     pub fn spawn_cancellable<F: Future<Output=T> + Send + 'a,
-                             Fu: FnOnce() -> T + Send + 'a>(&mut self, f: F, cancellation: Fu) {
-        use super::CancellableFuture;
-        self.spawn(CancellableFuture::new(self.len, self.lock.clone(), self.read_wakers.clone(), f, cancellation))
+                             Fu: FnOnce() -> T + Send + 'a>(
+        &mut self, f: F, default: Fu
+    ) {
+        self.spawn(crate::CancellableFuture::new(
+            self.cancellation.clone(), f, default
+        ))
     }
 }
 
 impl<'a, T> Scope<'a, T> {
     /// Cancel all futures spawned with cancellation.
+    #[inline]
     pub async fn cancel(&self) {
-        // Mark scope as being cancelled.
-        let mut lock = self.lock.write().await;
-        if !*lock { return; }
-        *lock = false;
-
-        // At this point, the read_wakers list is stable.
-        // No more wakers could be added any more (as the flag is set).
-        let mut list = self.read_wakers.lock().unwrap();
-        for w in list.iter() {
-            w.1.wake_by_ref();
-        }
-        list.clear();
+        self.cancellation.cancel().await;
     }
 
     /// Total number of futures spawned in this scope.
+    #[inline]
     pub fn len(&self) -> usize { self.len }
 
     /// Number of futures remaining in this scope.
+    #[inline]
     pub fn remaining(&self) -> usize { self.remaining }
 
     /// A slighly optimized `collect` on the stream. Also

@@ -23,6 +23,30 @@ async fn scope() {
     assert_eq!(count, 10);
 }
 
+/// Test scope bounds: should allow any future with lifetime
+/// larger than the scope's lifetime
+#[async_std::test]
+async fn scope_lifetime() {
+    use std::future::Future;
+    let static_fut = futures::future::ready(());
+    fn test_static<F: Future + 'static>(_: &F) {}
+    test_static(&static_fut);
+
+    let not_copy = String::from("hello world!");
+    let not_copy_ref = &not_copy;
+    let ((), vals) = unsafe { crate::scope_and_collect(|s| {
+        s.spawn(static_fut);
+        for _ in 0..10 {
+            let proc = || async {
+                assert_eq!(not_copy_ref, "hello world!");
+            };
+            s.spawn(proc());
+        }
+    })}.await;
+    assert_eq!(vals.len(), 11);
+
+}
+
 #[async_std::test]
 async fn scope_async() {
     let not_copy = String::from("hello world!");

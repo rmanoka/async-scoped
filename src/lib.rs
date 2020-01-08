@@ -73,10 +73,10 @@
 //! default value (provided by a closure during spawn) is
 //! returned as the output of the future.
 //!
-//! Note that cancellation requires some reasonable
-//! behaviour from the future and futures that do not return
-//! control to the executor cannot be cancelled until their
-//! next poll.
+//! **Note:** this is an abrupt, hard cancellation. It also
+//! requires a reasonable behaviour: futures that do not
+//! return control to the executor cannot be cancelled once
+//! it has started.
 //!
 //! ## Safety Considerations
 //!
@@ -130,6 +130,9 @@ pub use scoped::Scope;
 
 mod usage;
 pub use usage::{scope, scope_and_block, scope_and_collect};
+
+mod cancellation;
+pub(crate) use cancellation::Cancellation;
 
 #[cfg(test)]
 mod tests;
