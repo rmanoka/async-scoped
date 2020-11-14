@@ -1,16 +1,18 @@
-use std::task::{Poll, Context};
-use std::pin::Pin;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::{Stream, Future, FutureExt};
-use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
+use futures::{Future, Stream};
 
-use async_std::task::JoinHandle;
+cfg_async_std!{
+    use std::sync::Arc;
+    use crate::Cancellation;
+}
 
 use pin_project::{pin_project, pinned_drop};
-use crate::Cancellation;
+
+use crate::spawner::*;
 
 /// A scope to allow controlled spawning of non 'static
 /// futures. Futures can be spawned using `spawn` or
@@ -22,76 +24,93 @@ use crate::Cancellation;
 /// safety. It is not safe to forget this object unless it
 /// is driven to completion.
 #[pin_project(PinnedDrop)]
-pub struct Scope<'a, T> {
+pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
     done: bool,
     len: usize,
     remaining: usize,
+    #[cfg(feature = "use-async-std")]
     cancellation: Arc<Cancellation>,
     #[pin]
-    futs: FuturesUnordered<JoinHandle<T>>,
+    futs: FuturesUnordered<Sp::SpawnHandle>,
 
     // Future proof against variance changes
-    _marker: PhantomData<fn(&'a ()) -> &'a ()>
+    _marker: PhantomData<fn(&'a ()) -> &'a ()>,
+    _spawn_marker: PhantomData<Sp>,
 }
 
-impl<'a, T: Send + 'static> Scope<'a, T> {
+impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// Create a Scope object.
     ///
     /// This function is unsafe as `futs` may hold futures
     /// which have to be manually driven to completion.
     pub unsafe fn create() -> Self {
-        Scope{
+        Scope {
             done: false,
             len: 0,
             remaining: 0,
+            #[cfg(feature = "use-async-std")]
             cancellation: Arc::new(Cancellation::new()),
             futs: FuturesUnordered::new(),
             _marker: PhantomData,
+            _spawn_marker: PhantomData,
         }
     }
 
     /// Spawn a future with `async_std::task::spawn`. The
     /// future is expected to be driven to completion before
     /// 'a expires.
-    pub fn spawn<F: Future<Output=T> + Send + 'a>(&mut self, f: F) {
-        let handle = async_std::task::spawn(unsafe {
-            std::mem::transmute::<_, BoxFuture<'static, T>>(f.boxed())
+    pub fn spawn<F: Future<Output = T> + Send + 'a>(&mut self, f: F) {
+        let handle = Sp::spawn(unsafe {
+            std::mem::transmute::<_, Pin<Box<dyn Future<Output = T> + Send>>>(
+                Box::pin(f) as Pin<Box<dyn Future<Output = T>>>
+            )
         });
         self.futs.push(handle);
         self.len += 1;
         self.remaining += 1;
     }
 
-    /// Spawn a cancellable future with `async_std::task::spawn`
-    ///
-    /// The future is cancelled if the `Scope` is dropped
-    /// pre-maturely. It can also be cancelled by explicitly
-    /// calling (and awaiting) the `cancel` method.
-    #[inline]
-    pub fn spawn_cancellable<F: Future<Output=T> + Send + 'a,
-                             Fu: FnOnce() -> T + Send + 'a>(
-        &mut self, f: F, default: Fu
-    ) {
-        self.spawn(crate::CancellableFuture::new(
-            self.cancellation.clone(), f, default
-        ))
+    cfg_async_std!{
+        /// Spawn a cancellable future with `async_std::task::spawn`
+        ///
+        /// The future is cancelled if the `Scope` is dropped
+        /// pre-maturely. It can also be cancelled by explicitly
+        /// calling (and awaiting) the `cancel` method.
+        #[inline]
+        pub fn spawn_cancellable<F: Future<Output = T> + Send + 'a, Fu: FnOnce() -> T + Send + 'a>(
+            &mut self,
+            f: F,
+            default: Fu,
+        ) {
+            self.spawn(crate::CancellableFuture::new(
+                self.cancellation.clone(),
+                f,
+                default,
+            ))
+        }
     }
 }
 
-impl<'a, T> Scope<'a, T> {
-    /// Cancel all futures spawned with cancellation.
-    #[inline]
-    pub async fn cancel(&self) {
-        self.cancellation.cancel().await;
+impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
+    cfg_async_std!{
+        /// Cancel all futures spawned with cancellation.
+        #[inline]
+        pub async fn cancel(&self) {
+            self.cancellation.cancel().await;
+        }
     }
 
     /// Total number of futures spawned in this scope.
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
     /// Number of futures remaining in this scope.
     #[inline]
-    pub fn remaining(&self) -> usize { self.remaining }
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
 
     /// A slighly optimized `collect` on the stream. Also
     /// useful when we can not move out of self.
@@ -107,12 +126,10 @@ impl<'a, T> Scope<'a, T> {
     }
 }
 
-impl<'a, T> Stream for Scope<'a, T> {
+impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
     type Item = T;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context)
-                 -> Poll<Option<Self::Item>> {
-
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = self.project();
         let poll = this.futs.poll_next(cx);
         if let Poll::Ready(None) = poll {
@@ -121,7 +138,6 @@ impl<'a, T> Stream for Scope<'a, T> {
             *this.remaining -= 1;
         }
         poll
-
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -130,10 +146,11 @@ impl<'a, T> Stream for Scope<'a, T> {
 }
 
 #[pinned_drop]
-impl<'a, T> PinnedDrop for Scope<'a, T> {
+impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
     fn drop(mut self: Pin<&mut Self>) {
         if !self.done {
-            async_std::task::block_on(async {
+            <Sp as Blocker>::block_on(async {
+                #[cfg(feature = "use-async-std")]
                 self.cancel().await;
                 self.collect().await;
             });

@@ -2,7 +2,10 @@ use std::sync::Mutex;
 use std::task::{Poll, Waker, Context};
 use std::pin::Pin;
 use std::future::Future;
+
+#[cfg(feature = "use-async-std")]
 use async_std::sync::RwLock;
+
 use slab::Slab;
 
 pub struct Cancellation {

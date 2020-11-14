@@ -122,17 +122,31 @@
 //! [forget]: std::mem::forget
 //! [Stream]: futures::Stream
 //! [for_each_concurrent]: futures::StreamExt::for_each_concurrent
-mod cancellable_future;
-pub(crate) use cancellable_future::CancellableFuture;
+
+#[macro_use]
+mod utils;
 
 mod scoped;
 pub use scoped::Scope;
 
+cfg_async_std! {
+    pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
+    pub use spawner::use_async_std::AsyncStd;
+
+    mod cancellable_future;
+    pub(crate) use cancellable_future::CancellableFuture;
+    mod cancellation;
+    pub(crate) use cancellation::Cancellation;
+}
+
+cfg_tokio!{
+    pub type TokioScope<'a, T> = scoped::Scope<'a, T, spawner::use_tokio::Tokio>;
+    pub use spawner::use_tokio::Tokio;
+}
+
+mod spawner;
 mod usage;
-pub use usage::{scope, scope_and_block, scope_and_collect};
 
-mod cancellation;
-pub(crate) use cancellation::Cancellation;
-
-#[cfg(test)]
-mod tests;
+cfg_any_spawner!{
+    mod tests;
+}
