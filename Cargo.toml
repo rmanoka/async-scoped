@@ -1,6 +1,6 @@
 [package]
 name = "async-scoped"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Rajsekar Manokaran <rajsekar@gmail.com>"]
 edition = "2018"
 
@@ -24,7 +24,7 @@ futures = "0.3.1"
 tokio = {version = "0.3.3", features = ["rt-multi-thread", "macros", "sync"], optional = true}
 
 [features]
-
+# Verify package.metadata.docs.rs when updating
 use-async-std = ["async-std"]
 use-tokio = ["tokio"]
 
@@ -33,3 +33,6 @@ use-tokio = ["tokio"]
 femme = "1.3.0"
 log = { version = "0.4.8", features = ["kv_unstable"] }
 async-std = { version = "1.6.3", features = ["attributes"] }
+
+[package.metadata.docs.rs]
+features = ["use-async-std", "use-tokio"]
