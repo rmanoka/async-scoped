@@ -145,15 +145,29 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
     }
 }
 
-#[pinned_drop]
-impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
-    fn drop(mut self: Pin<&mut Self>) {
-        if !self.done {
-            <Sp as Blocker>::block_on(async {
-                #[cfg(feature = "use-async-std")]
-                self.cancel().await;
-                self.collect().await;
-            });
+cfg_any_spawner! {
+    #[pinned_drop]
+    impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
+        fn drop(mut self: Pin<&mut Self>) {
+            if !self.done {
+                <Sp as Blocker>::block_on(async {
+                    self.cancel().await;
+                    self.collect().await;
+                });
+            }
+        }
+    }
+}
+
+cfg_no_spawner! {
+    #[pinned_drop]
+    impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
+        fn drop(mut self: Pin<&mut Self>) {
+            if !self.done {
+                <Sp as Blocker>::block_on(async {
+                    self.collect().await;
+                });
+            }
         }
     }
 }

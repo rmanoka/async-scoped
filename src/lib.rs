@@ -31,7 +31,7 @@
 //!
 //! See [`scope`][Scope::scope] for the exact definition, and
 //! safety guidelines. The simplest and safest API is
-//! [`scope_and_block`][scope_and_block], used as follows:
+//! [`scope_and_block`][Scope::scope_and_block], used as follows:
 //!
 //! ``` rust, ignore
 //! async fn scoped_futures() {
@@ -62,10 +62,27 @@
 //! However, the user should ensure that the returned future
 //! _is not forgetten_ before being driven to completion.
 //!
+//! ## Executor Selection
+//!
+//! Users **must use** either "use-async-std", or the
+//! "use-tokio" feature gates, to obtain a usable scope
+//! type. These gates provide [`TokioScope`] and
+//! [`AsyncScope`] that support spawning, and blocking. Here
+//! is a run-down of key differences between the two
+//! runtimes.
+//!
+//! 1. [`AsyncScope`] may run into a dead-lock if used in
+//! deep recursions (depth > #num-cores / 2).
+//!
+//! 2. [`TokioScope::scope_and_block`][Scope::scope_and_block] may only be used
+//! within a multi-threaded. An incompletely driven
+//! `TokioScope` also needs a multi-threaded context to be
+//! dropped.
+//!
 //! ## Cancellation
 //!
 //! To support cancellation, `Scope` provides a
-//! [`spawn_cancellable`][spawn_cancellable] which wraps a
+//! [`spawn_cancellable`][Scope::spawn_cancellable] which wraps a
 //! future to make it cancellable. When a `Scope` is
 //! dropped, (or if `cancel` method is invoked), all the
 //! cancellable futures are scheduled for cancellation. In
@@ -78,22 +95,19 @@
 //! return control to the executor cannot be cancelled once
 //! it has started.
 //!
-//! **Note.** This feature is currently available only with
-//! "use-async-std" feature.
-//!
 //! ## Safety Considerations
 //!
-//! The [`scope`][scope] API provided in this crate is
+//! The [`scope`][Scope::scope] API provided in this crate is
 //! unsafe as it is possible to `forget` the stream received
 //! from the API without driving it to completion. The only
 //! completely (without any additional assumptions) safe API
-//! is the [`scope_and_block`][scope_and_block] function,
+//! is the [`scope_and_block`][Scope::scope_and_block] function,
 //! which _blocks the current thread_ until all spawned
 //! futures complete.
 //!
-//! The [`scope_and_block`][scope_and_block] may not be
+//! The [`scope_and_block`][Scope::scope_and_block] may not be
 //! convenient in an asynchronous setting. In this case, the
-//! [`scope_and_collect`][scope_and_collect] API may be
+//! [`scope_and_collect`][Scope::scope_and_collect] API may be
 //! used. Care must be taken to ensure the returned future
 //! is not forgotten before being driven to completion.
 //!
