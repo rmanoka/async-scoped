@@ -1,17 +1,17 @@
 [package]
 name = "async-scoped"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Rajsekar Manokaran <rajsekar@gmail.com>"]
 edition = "2018"
 
 documentation = "https://docs.rs/async-scoped"
-description = "Spawn scoped (non 'static) asynchronous futures using async_std runtime"
+description = "Spawn scoped (non 'static) asynchronous futures for async_std and tokio runtimes"
 homepage = "https://github.com/rmanoka/async-scoped"
 repository = "https://github.com/rmanoka/async-scoped"
 readme = "README.md"
 
 categories = [ "asynchronous", "concurrency" ]
-keywords = [ "async", "async-std", "scoped", "spawn" ]
+keywords = [ "async", "async-std", "tokio", "scoped", "spawn" ]
 license = "Apache-2.0/MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

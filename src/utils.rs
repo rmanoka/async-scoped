@@ -37,3 +37,13 @@ macro_rules! cfg_any_spawner {
         )*
     }
 }
+
+#[macro_use]
+macro_rules! cfg_no_spawner {
+    ($($item:item)*) => {
+        $(
+            #[cfg(not( any(feature = "use-async-std", feature = "use-tokio") ))]
+            $item
+        )*
+    }
+}
