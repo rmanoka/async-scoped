@@ -133,160 +133,159 @@ test_fixtures! {
     }
 
 
-/// This is a simplified version of the soundness bug
-/// pointed out on [reddit][reddit-ref]. Here, we test that
-/// it does not happen when using the `scope_and_collect`,
-/// but the returned future is not forgotten. Forgetting the
-/// future should lead to an invalid memory access.
-///
-/// [reddit-ref]: https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-#[cfg(feature = "async-std")]
-async fn cancellation_soundness() {
-    use async_std::future;
-    use std::time::*;
+    /// This is a simplified version of the soundness bug
+    /// pointed out on [reddit][reddit-ref]. Here, we test that
+    /// it does not happen when using the `scope_and_collect`,
+    /// but the returned future is not forgotten. Forgetting the
+    /// future should lead to an invalid memory access.
+    ///
+    /// [reddit-ref]: https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+    async fn cancellation_soundness() {
+        use async_std::future;
+        use std::time::*;
 
-    async fn inner() {
-        let mut shared = true;
-        let shared_ref = &mut shared;
+        async fn inner() {
+            let mut shared = true;
+            let shared_ref = &mut shared;
 
-        let start = Instant::now();
+            let start = Instant::now();
 
-        let mut fut = Box::pin(
-            unsafe { Scope::scope_and_collect(|scope| {
-                scope.spawn_cancellable(async {
-                    assert!(future::timeout(
-                        Duration::from_millis(500),
-                        future::pending::<()>(),
-                    ).await.is_err());
+            let mut fut = Box::pin(
+                unsafe { Scope::scope_and_collect(|scope| {
+                    scope.spawn_cancellable(async {
+                        assert!(future::timeout(
+                            Duration::from_millis(500),
+                            future::pending::<()>(),
+                        ).await.is_err());
 
-                    eprintln!("Trying to write to shared_ref");
-                    *shared_ref = false;
-                    assert!(*shared_ref);
-                }, || ());
-            })}
-        );
-        let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
+                        eprintln!("Trying to write to shared_ref");
+                        *shared_ref = false;
+                        assert!(*shared_ref);
+                    }, || ());
+                })}
+            );
+            let _ = future::timeout(Duration::from_millis(10), &mut fut).await;
 
-        // Dropping explicitly to measure time taken to complete drop.
-        // Change the drop to forget for panic due to invalid mem. access.
-        std::mem::drop(fut);
-        let elapsed = start.elapsed().as_millis();
+            // Dropping explicitly to measure time taken to complete drop.
+            // Change the drop to forget for panic due to invalid mem. access.
+            std::mem::drop(fut);
+            let elapsed = start.elapsed().as_millis();
 
 
-        // The cancelled future should have been polled
-        // before the inner large timeout.
-        assert!(elapsed < 100);
-        eprintln!("Elapsed: {}ms", start.elapsed().as_millis());
-    }
-
-    inner().await;
-
-    // This timeout allows any (possible) invalid memory
-    // access to actually take place.
-    assert!(future::timeout(Duration::from_millis(600),
-                            future::pending::<()>()).await.is_err());
-
-}
-
-/// This test is resource consuming and ignored by default
-#[ignore]
-async fn backpressure() {
-    let mut s = unsafe { Scope::create() };
-    let limit = 0x10;
-    for i in 0..0x100 {
-        s.spawn(async {
-            // Allocate a large array (256 MB)
-            let blob = vec![42u8; 0x10000000];
-
-            // Spend a lot of time on it asynchronously
-            use async_std::future;
-            use std::time::Duration;
-            let _ = future::timeout(
-                Duration::from_millis(100),
-                future::pending::<()>()
-            ).await;
-
-            std::mem::drop(blob);
-        });
-
-        while s.remaining() > limit {
-            use futures::StreamExt;
-            s.next().await;
+            // The cancelled future should have been polled
+            // before the inner large timeout.
+            assert!(elapsed < 100);
+            eprintln!("Elapsed: {}ms", start.elapsed().as_millis());
         }
-        eprintln!("Spawned {} futures", i);
+
+        inner().await;
+
+        // This timeout allows any (possible) invalid memory
+        // access to actually take place.
+        assert!(future::timeout(Duration::from_millis(600),
+                                future::pending::<()>()).await.is_err());
+
     }
-}
 
-// Mutability test: should fail to compile.
-// TODO: use compiletest_rs
-// #[async_std::test]
-// async fn mutating_scope() {
-//     let mut not_copy = String::from("hello world!");
-//     let not_copy_ref = &mut not_copy;
-//     let mut count = 0;
+    /// This test is resource consuming and ignored by default
+    #[ignore]
+    async fn backpressure() {
+        let mut s = unsafe { Scope::create() };
+        let limit = 0x10;
+        for i in 0..0x100 {
+            s.spawn(async {
+                // Allocate a large array (256 MB)
+                let blob = vec![42u8; 0x10000000];
 
-//     crate::scope_and_block(|s| {
-//         for _ in 0..10 {
-//             let proc = || async {
-//                 not_copy_ref.push('.');
-//             };
-//             s.spawn(proc()); //~ ERROR
-//         }
-//     });
+                // Spend a lot of time on it asynchronously
+                use async_std::future;
+                use std::time::Duration;
+                let _ = future::timeout(
+                    Duration::from_millis(100),
+                    future::pending::<()>()
+                ).await;
 
-//     assert_eq!(count, 10);
-// }
-
-/// https://github.com/rmanoka/async-scoped/issues/2
-/// https://github.com/async-rs/async-std/issues/644
-async fn test_async_deadlock() {
-    use std::future::Future;
-    use futures::FutureExt;
-    fn nth(n: usize) -> impl Future<Output=usize> + Send {
-        eprintln!("nth({})", n);
-        async move {
-            let mut result: usize = 0;
-            Scope::scope_and_block(|scope| {
-                if n > 0 {
-                    scope.spawn(async {
-                        let rec = { nth(n-1).boxed() }.await;
-                        result = rec + 1;
-                    });
-                }
+                std::mem::drop(blob);
             });
-            eprintln!("nth({})={}", n, result);
-            result
+
+            while s.remaining() > limit {
+                use futures::StreamExt;
+                s.next().await;
+            }
+            eprintln!("Spawned {} futures", i);
         }
     }
-    let input = 4;
-    assert_eq!(nth(input).await, input);
-}
 
-#[cfg(feature = "use-tokio")]
-/// https://github.com/rmanoka/async-scoped/issues/2
-/// https://github.com/async-rs/async-std/issues/644
-async fn test_async_deadlock_tokio() {
-    use std::future::Future;
-    use futures::FutureExt;
-    fn nth(n: usize) -> impl Future<Output=usize> + Send {
-        // eprintln!("nth({})", n);
+    // Mutability test: should fail to compile.
+    // TODO: use compiletest_rs
+    // #[async_std::test]
+    // async fn mutating_scope() {
+    //     let mut not_copy = String::from("hello world!");
+    //     let not_copy_ref = &mut not_copy;
+    //     let mut count = 0;
 
-        async move {
-            let result = if n == 0 {
-                0
-            } else {
+    //     crate::scope_and_block(|s| {
+    //         for _ in 0..10 {
+    //             let proc = || async {
+    //                 not_copy_ref.push('.');
+    //             };
+    //             s.spawn(proc()); //~ ERROR
+    //         }
+    //     });
+
+    //     assert_eq!(count, 10);
+    // }
+
+    /// https://github.com/rmanoka/async-scoped/issues/2
+    /// https://github.com/async-rs/async-std/issues/644
+    async fn test_async_deadlock() {
+        use std::future::Future;
+        use futures::FutureExt;
+        fn nth(n: usize) -> impl Future<Output=usize> + Send {
+            eprintln!("nth({})", n);
+            async move {
+                let mut result: usize = 0;
                 Scope::scope_and_block(|scope| {
-                    scope.spawn(nth(n-1).boxed());
-                }).1[0] + 1
-            };
-
-            // eprintln!("nth({})={}", n, result);
-            result
+                    if n > 0 {
+                        scope.spawn(async {
+                            let rec = { nth(n-1).boxed() }.await;
+                            result = rec + 1;
+                        });
+                    }
+                });
+                eprintln!("nth({})={}", n, result);
+                result
+            }
         }
+        let input = 4;
+        assert_eq!(nth(input).await, input);
     }
-    // Tokio has a block_in_place functionality, that lets
-    // us recurse without deadlocks.
-    let input = 200;
-    assert_eq!(nth(input).await, input);
-}
+
+    #[cfg(feature = "use-tokio")]
+    /// https://github.com/rmanoka/async-scoped/issues/2
+    /// https://github.com/async-rs/async-std/issues/644
+    async fn test_async_deadlock_tokio() {
+        use std::future::Future;
+        use futures::FutureExt;
+        fn nth(n: usize) -> impl Future<Output=usize> + Send {
+            // eprintln!("nth({})", n);
+
+            async move {
+                let result = if n == 0 {
+                    0
+                } else {
+                    Scope::scope_and_block(|scope| {
+                        scope.spawn(nth(n-1).boxed());
+                    }).1[0] + 1
+                };
+
+                // eprintln!("nth({})={}", n, result);
+                result
+            }
+        }
+        // Tokio has a block_in_place functionality, that lets
+        // us recurse without deadlocks.
+        let input = 200;
+        assert_eq!(nth(input).await, input);
+    }
 }

@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use futures::stream::FuturesUnordered;
 use futures::{Future, Stream};
 
-cfg_async_std!{
+cfg_any_spawner!{
     use std::sync::Arc;
     use crate::Cancellation;
 }
@@ -28,7 +28,7 @@ pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
     done: bool,
     len: usize,
     remaining: usize,
-    #[cfg(feature = "use-async-std")]
+    #[cfg(any(feature = "use-async-std", feature = "use-tokio"))]
     cancellation: Arc<Cancellation>,
     #[pin]
     futs: FuturesUnordered<Sp::SpawnHandle>,
@@ -48,7 +48,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
             done: false,
             len: 0,
             remaining: 0,
-            #[cfg(feature = "use-async-std")]
+            #[cfg(any(feature = "use-async-std", feature = "use-tokio"))]
             cancellation: Arc::new(Cancellation::new()),
             futs: FuturesUnordered::new(),
             _marker: PhantomData,
@@ -70,7 +70,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         self.remaining += 1;
     }
 
-    cfg_async_std!{
+    cfg_any_spawner!{
         /// Spawn a cancellable future with `async_std::task::spawn`
         ///
         /// The future is cancelled if the `Scope` is dropped
@@ -92,7 +92,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
 }
 
 impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
-    cfg_async_std!{
+    cfg_any_spawner!{
         /// Cancel all futures spawned with cancellation.
         #[inline]
         pub async fn cancel(&self) {

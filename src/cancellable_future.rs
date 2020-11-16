@@ -40,5 +40,4 @@ impl<I, F: Future<Output=I>, Fu: FnOnce() -> I> Future
             Poll::Ready(this.default.take().unwrap()())
         }
     }
-
 }

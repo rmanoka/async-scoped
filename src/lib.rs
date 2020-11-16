@@ -1,7 +1,7 @@
 //! Enables controlled spawning of non-`'static` futures
-//! when using the [async-std][async_std] executor. Note
-//! that this idea is similar to `crossbeam::scope`, and
-//! `rayon::scope` but asynchronous.
+//! when using the [async-std] or [tokio]
+//! executors. Note that this idea is similar to
+//! `crossbeam::scope`, and `rayon::scope` but asynchronous.
 //!
 //! ## Motivation
 //!
@@ -29,19 +29,19 @@
 //! }
 //! ```
 //!
-//! See [`scope`][scope] for the exact definition, and
+//! See [`scope`][Scope::scope] for the exact definition, and
 //! safety guidelines. The simplest and safest API is
 //! [`scope_and_block`][scope_and_block], used as follows:
 //!
-//! ``` rust
-//! #[async_std::test]
+//! ``` rust, ignore
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = async_scoped::scope_and_block(|s| {
+//!     let (foo, outputs) = async_scoped::AsyncScope::scope_and_block(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
+//!                 eprintln!("Hello world!")
 //!             };
 //!             s.spawn(proc());
 //!         }
@@ -52,12 +52,12 @@
 //! }
 //! ```
 //!
-//! The [`scope_and_block`][scope_and_block] function above
+//! The [`scope_and_block`][Scope::scope_and_block] function above
 //! blocks the current thread until all spawned futures are
 //! driven in order to guarantee safety.
 //!
 //! We also provide an unsafe
-//! [`scope_and_collect`][scope_and_collect], which is
+//! [`scope_and_collect`][Scope::scope_and_collect], which is
 //! asynchronous, and does not block the current thread.
 //! However, the user should ensure that the returned future
 //! _is not forgetten_ before being driven to completion.
@@ -77,6 +77,9 @@
 //! requires a reasonable behaviour: futures that do not
 //! return control to the executor cannot be cancelled once
 //! it has started.
+//!
+//! **Note.** This feature is currently available only with
+//! "use-async-std" feature.
 //!
 //! ## Safety Considerations
 //!
@@ -116,9 +119,10 @@
 //! method is allowed in safe Rust, the purely asynchronous
 //! API here is _inherently unsafe_.
 //!
-//! [async-std]: async_std
+//! [async-std]: /async_std
+//! [tokio]: /tokio
 //! [poll]: std::futures::Future::poll
-//! [Task]: std::task::Task
+//! [Task]: std::task
 //! [forget]: std::mem::forget
 //! [Stream]: futures::Stream
 //! [for_each_concurrent]: futures::StreamExt::for_each_concurrent
@@ -129,14 +133,16 @@ mod utils;
 mod scoped;
 pub use scoped::Scope;
 
-cfg_async_std! {
-    pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
-    pub use spawner::use_async_std::AsyncStd;
-
+cfg_any_spawner! {
     mod cancellable_future;
     pub(crate) use cancellable_future::CancellableFuture;
     mod cancellation;
     pub(crate) use cancellation::Cancellation;
+}
+
+cfg_async_std! {
+    pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
+    pub use spawner::use_async_std::AsyncStd;
 }
 
 cfg_tokio!{
