@@ -3,8 +3,14 @@ use std::task::{Poll, Waker, Context};
 use std::pin::Pin;
 use std::future::Future;
 
-#[cfg(feature = "use-async-std")]
-use async_std::sync::RwLock;
+cfg_async_std! {
+    use async_std::sync::RwLock;
+}
+
+cfg_async_std_or_else! {
+    use tokio::sync::RwLock;
+}
+
 
 use slab::Slab;
 
@@ -47,7 +53,31 @@ impl Cancellation {
         fut: Pin<&mut F>, cx: &mut Context,
     ) -> Option<(Poll<I>, Option<usize>)> {
 
-        if let Some(guard) = self.flag.try_read() {
+        cfg_async_std_or_else! {
+            macro_rules! with_guard {
+                () => {{
+                    use futures::Future;
+                    use std::task::Poll;
+                    use tokio::pin;
+                    let read_fut = self.flag.read();
+                    pin!(read_fut);
+                    let result = read_fut.poll(cx);
+                    match result {
+                        Poll::Pending => None,
+                        Poll::Ready(guard) => Some(guard)
+                    }
+                }}
+            }
+        }
+        cfg_async_std! {
+            macro_rules! with_guard {
+                () => {{
+                    self.flag.try_read()
+                }}
+            }
+        }
+
+        if let Some(guard) = with_guard!() {
             if *guard {
                 let poll_result = fut.poll(cx);
 
