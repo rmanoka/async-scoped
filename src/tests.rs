@@ -267,6 +267,7 @@ test_fixtures! {
     async fn test_async_deadlock_tokio() {
         use std::future::Future;
         use futures::FutureExt;
+        use crate::TokioScope;
         fn nth(n: usize) -> impl Future<Output=usize> + Send {
             // eprintln!("nth({})", n);
 
@@ -274,9 +275,9 @@ test_fixtures! {
                 let result = if n == 0 {
                     0
                 } else {
-                    Scope::scope_and_block(|scope| {
+                    TokioScope::scope_and_block(|scope| {
                         scope.spawn(nth(n-1).boxed());
-                    }).1[0] + 1
+                    }).1[0].as_ref().unwrap() + 1
                 };
 
                 // eprintln!("nth({})={}", n, result);

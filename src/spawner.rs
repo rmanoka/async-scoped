@@ -1,7 +1,8 @@
 use futures::Future;
 
 pub trait Spawner<T> {
-    type SpawnHandle: Future<Output=T> + Send;
+    type FutureOutput;
+    type SpawnHandle: Future<Output=Self::FutureOutput> + Send;
     fn spawn<F: Future<Output=T> + Send + 'static>(f: F) -> Self::SpawnHandle;
 }
 
@@ -16,6 +17,7 @@ pub mod use_async_std {
     pub struct AsyncStd;
 
     impl<T: Send + 'static> Spawner<T> for AsyncStd {
+        type FutureOutput = T;
         type SpawnHandle = JoinHandle<T>;
 
         fn spawn<F: Future<Output=T> + Send + 'static>(f: F) -> Self::SpawnHandle {
@@ -36,16 +38,13 @@ cfg_tokio! {
         use super::*;
         use tokio::task as tokio_task;
         pub struct Tokio;
-        use std::pin::Pin;
 
         impl<T: Send + 'static> Spawner<T> for Tokio {
-            type SpawnHandle = Pin<Box<dyn Future<Output=T> + Send>>;
+            type FutureOutput = Result<T, tokio_task::JoinError>;
+            type SpawnHandle = tokio_task::JoinHandle<T>;
 
             fn spawn<F: Future<Output=T> + Send + 'static>(f: F) -> Self::SpawnHandle {
-                let handle = tokio_task::spawn(f);
-                Box::pin(async {
-                    handle.await.unwrap()
-                })
+                tokio_task::spawn(f)
             }
         }
         impl Blocker for Tokio {

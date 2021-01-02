@@ -10,7 +10,7 @@ cfg_any_spawner!{
     use crate::Cancellation;
 }
 
-use pin_project::{pin_project, pinned_drop};
+use pin_project::*;
 
 use crate::spawner::*;
 
@@ -114,7 +114,7 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
 
     /// A slighly optimized `collect` on the stream. Also
     /// useful when we can not move out of self.
-    pub async fn collect(&mut self) -> Vec<T> {
+    pub async fn collect(&mut self) -> Vec<Sp::FutureOutput> {
         let mut proc_outputs = Vec::with_capacity(self.remaining);
 
         use futures::StreamExt;
@@ -127,7 +127,7 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
 }
 
 impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
-    type Item = T;
+    type Item = Sp::FutureOutput;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = self.project();

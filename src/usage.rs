@@ -52,7 +52,7 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// recursively spawned should have the same lifetime as the
     /// top-level scope, or there should not be any spurious
     /// future cancellations within the top level scope.
-    pub fn scope_and_block<R, F>(f: F) -> (R, Vec<T>)
+    pub fn scope_and_block<R, F>(f: F) -> (R, Vec<Sp::FutureOutput>)
     where T: Send + 'static,
           Sp: Spawner<T> + Blocker,
           F: FnOnce(&mut Scope<'a, T, Sp>) -> R
@@ -80,7 +80,7 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// spawned futures complete.
     ///
     /// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
-    pub async unsafe fn scope_and_collect<R, F>(f: F) -> (R, Vec<T>)
+    pub async unsafe fn scope_and_collect<R, F>(f: F) -> (R, Vec<Sp::FutureOutput>)
     where T: Send + 'static,
           F: FnOnce(&mut Scope<'a, T, Sp>) -> R
     {

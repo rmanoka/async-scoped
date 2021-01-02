@@ -9,6 +9,7 @@ macro_rules! cfg_async_std {
 }
 
 #[macro_use]
+#[allow(unused_macros)]
 macro_rules! cfg_async_std_or_else {
     ($($item:item)*) => {
         $(
