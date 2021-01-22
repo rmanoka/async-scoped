@@ -44,8 +44,8 @@ test_fixtures! {
         assert_eq!(count, 10);
     }
 
-    /// Test scope bounds: should allow any future with lifetime
-    /// larger than the scope's lifetime
+    // Test scope bounds: should allow any future with lifetime
+    // larger than the scope's lifetime
     async fn scope_lifetime() {
         use std::future::Future;
         let static_fut = futures::future::ready(());
@@ -133,13 +133,13 @@ test_fixtures! {
     }
 
 
-    /// This is a simplified version of the soundness bug
-    /// pointed out on [reddit][reddit-ref]. Here, we test that
-    /// it does not happen when using the `scope_and_collect`,
-    /// but the returned future is not forgotten. Forgetting the
-    /// future should lead to an invalid memory access.
-    ///
-    /// [reddit-ref]: https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
+    // This is a simplified version of the soundness bug
+    // pointed out on [reddit][reddit-ref]. Here, we test that
+    // it does not happen when using the `scope_and_collect`,
+    // but the returned future is not forgotten. Forgetting the
+    // future should lead to an invalid memory access.
+    //
+    // [reddit-ref]: https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
     async fn cancellation_soundness() {
         use async_std::future;
         use std::time::*;
@@ -187,7 +187,7 @@ test_fixtures! {
 
     }
 
-    /// This test is resource consuming and ignored by default
+    // This test is resource consuming and ignored by default
     #[ignore]
     async fn backpressure() {
         let mut s = unsafe { Scope::create() };
@@ -236,8 +236,8 @@ test_fixtures! {
     //     assert_eq!(count, 10);
     // }
 
-    /// https://github.com/rmanoka/async-scoped/issues/2
-    /// https://github.com/async-rs/async-std/issues/644
+    // https://github.com/rmanoka/async-scoped/issues/2
+    // https://github.com/async-rs/async-std/issues/644
     async fn test_async_deadlock() {
         use std::future::Future;
         use futures::FutureExt;
@@ -261,32 +261,34 @@ test_fixtures! {
         assert_eq!(nth(input).await, input);
     }
 
-    #[cfg(feature = "use-tokio")]
-    /// https://github.com/rmanoka/async-scoped/issues/2
-    /// https://github.com/async-rs/async-std/issues/644
-    async fn test_async_deadlock_tokio() {
-        use std::future::Future;
-        use futures::FutureExt;
-        use crate::TokioScope;
-        fn nth(n: usize) -> impl Future<Output=usize> + Send {
-            // eprintln!("nth({})", n);
+}
 
-            async move {
-                let result = if n == 0 {
-                    0
-                } else {
-                    TokioScope::scope_and_block(|scope| {
-                        scope.spawn(nth(n-1).boxed());
-                    }).1[0].as_ref().unwrap() + 1
-                };
+#[cfg(feature = "use-tokio")]
+// https://github.com/rmanoka/async-scoped/issues/2
+// https://github.com/async-rs/async-std/issues/644
+#[tokio::test(flavor = "multi_thread", worker_threads=1)]
+async fn test_async_deadlock_tokio() {
+    use std::future::Future;
+    use futures::FutureExt;
+    use crate::TokioScope;
+    fn nth(n: usize) -> impl Future<Output=usize> + Send {
+        // eprintln!("nth({})", n);
 
-                // eprintln!("nth({})={}", n, result);
-                result
-            }
+        async move {
+            let result = if n == 0 {
+                0
+            } else {
+                TokioScope::scope_and_block(|scope| {
+                    scope.spawn(nth(n-1).boxed());
+                }).1[0].as_ref().unwrap() + 1
+            };
+
+            // eprintln!("nth({})={}", n, result);
+            result
         }
-        // Tokio has a block_in_place functionality, that lets
-        // us recurse without deadlocks.
-        let input = 200;
-        assert_eq!(nth(input).await, input);
     }
+    // Tokio has a block_in_place functionality, that lets
+    // us recurse without deadlocks.
+    let input = 200;
+    assert_eq!(nth(input).await, input);
 }

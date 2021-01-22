@@ -168,5 +168,6 @@ mod spawner;
 mod usage;
 
 cfg_any_spawner!{
+    #[cfg(test)]
     mod tests;
 }
