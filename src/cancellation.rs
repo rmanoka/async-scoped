@@ -78,7 +78,7 @@ impl Cancellation {
         }
 
         if let Some(guard) = with_guard!() {
-            if *guard {
+            if !*guard {
                 let poll_result = fut.poll(cx);
 
                 // Add the waker from context into read_wakers list
