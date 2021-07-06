@@ -147,13 +147,6 @@ mod utils;
 mod scoped;
 pub use scoped::Scope;
 
-cfg_any_spawner! {
-    mod cancellable_future;
-    pub(crate) use cancellable_future::CancellableFuture;
-    mod cancellation;
-    pub(crate) use cancellation::Cancellation;
-}
-
 cfg_async_std! {
     pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
     pub use spawner::use_async_std::AsyncStd;

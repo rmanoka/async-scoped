@@ -4,11 +4,7 @@ use std::task::{Context, Poll};
 
 use futures::stream::FuturesUnordered;
 use futures::{Future, Stream};
-
-cfg_any_spawner!{
-    use std::sync::Arc;
-    use crate::Cancellation;
-}
+use futures::future::{AbortHandle, Abortable};
 
 use pin_project::*;
 
@@ -28,10 +24,9 @@ pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
     done: bool,
     len: usize,
     remaining: usize,
-    #[cfg(any(feature = "use-async-std", feature = "use-tokio"))]
-    cancellation: Arc<Cancellation>,
     #[pin]
     futs: FuturesUnordered<Sp::SpawnHandle>,
+    abort_handles: Vec<AbortHandle>,
 
     // Future proof against variance changes
     _marker: PhantomData<fn(&'a ()) -> &'a ()>,
@@ -48,9 +43,8 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
             done: false,
             len: 0,
             remaining: 0,
-            #[cfg(any(feature = "use-async-std", feature = "use-tokio"))]
-            cancellation: Arc::new(Cancellation::new()),
             futs: FuturesUnordered::new(),
+            abort_handles: vec![],
             _marker: PhantomData,
             _spawn_marker: PhantomData,
         }
@@ -70,33 +64,33 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         self.remaining += 1;
     }
 
-    cfg_any_spawner!{
-        /// Spawn a cancellable future with `async_std::task::spawn`
-        ///
-        /// The future is cancelled if the `Scope` is dropped
-        /// pre-maturely. It can also be cancelled by explicitly
-        /// calling (and awaiting) the `cancel` method.
-        #[inline]
-        pub fn spawn_cancellable<F: Future<Output = T> + Send + 'a, Fu: FnOnce() -> T + Send + 'a>(
-            &mut self,
-            f: F,
-            default: Fu,
-        ) {
-            self.spawn(crate::CancellableFuture::new(
-                self.cancellation.clone(),
-                f,
-                default,
-            ))
-        }
+    /// Spawn a cancellable future with `async_std::task::spawn`
+    ///
+    /// The future is cancelled if the `Scope` is dropped
+    /// pre-maturely. It can also be cancelled by explicitly
+    /// calling (and awaiting) the `cancel` method.
+    #[inline]
+    pub fn spawn_cancellable<F: Future<Output = T> + Send + 'a, Fu: FnOnce() -> T + Send + 'a>(
+        &mut self,
+        f: F,
+        default: Fu,
+    ) {
+        let (h, reg) = AbortHandle::new_pair();
+        self.abort_handles.push(h);
+        let fut = Abortable::new(f, reg);
+        self.spawn(async {
+            fut.await
+                .unwrap_or_else(|_| default())
+        })
     }
 }
 
 impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
-    cfg_any_spawner!{
-        /// Cancel all futures spawned with cancellation.
-        #[inline]
-        pub async fn cancel(&self) {
-            self.cancellation.cancel().await;
+    /// Cancel all futures spawned with cancellation.
+    #[inline]
+    pub fn cancel(&mut self) {
+        for h in self.abort_handles.drain(..) {
+            h.abort();
         }
     }
 
@@ -145,29 +139,14 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
     }
 }
 
-cfg_any_spawner! {
-    #[pinned_drop]
-    impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
-        fn drop(mut self: Pin<&mut Self>) {
-            if !self.done {
-                <Sp as Blocker>::block_on(async {
-                    self.cancel().await;
-                    self.collect().await;
-                });
-            }
-        }
-    }
-}
-
-cfg_no_spawner! {
-    #[pinned_drop]
-    impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
-        fn drop(mut self: Pin<&mut Self>) {
-            if !self.done {
-                <Sp as Blocker>::block_on(async {
-                    self.collect().await;
-                });
-            }
+#[pinned_drop]
+impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
+    fn drop(mut self: Pin<&mut Self>) {
+        if !self.done {
+            <Sp as Blocker>::block_on(async {
+                self.cancel();
+                self.collect().await;
+            });
         }
     }
 }

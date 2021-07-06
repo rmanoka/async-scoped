@@ -9,12 +9,18 @@ macro_rules! test_fixtures {
 }
 
 cfg_async_std! {
-    #[cfg(test)]
     use crate::AsyncScope as Scope;
+
+    fn future_value<T>(v: T) -> T {
+        v
+    }
 }
 cfg_async_std_or_else! {
-    #[cfg(test)]
     use crate::TokioScope as Scope;
+
+    fn future_value<T>(v: Result<T, tokio::task::JoinError>) -> T {
+        v.expect("join error while unwrapping value")
+    }
 }
 
 test_fixtures! {
@@ -138,7 +144,7 @@ test_fixtures! {
         // Represents a work future
         async fn proc() -> bool {
             future::timeout(
-                Duration::from_millis(500),
+                Duration::from_millis(100),
                 future::pending::<()>(),
             ).await.is_err()
         }
@@ -146,7 +152,32 @@ test_fixtures! {
             scope.spawn_cancellable(proc(), || false);
         });
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0], true);
+        for i in items {
+            assert_eq!(future_value(i), true);
+        }
+    }
+
+    // Check that a cancellable future works as the
+    // contained future under normal circumstances.
+    async fn test_cancellation_works() {
+        use async_std::future;
+        use std::time::*;
+
+        // Represents a work future
+        async fn proc() -> bool {
+            future::timeout(
+                Duration::from_millis(10000),
+                future::pending::<()>(),
+            ).await.is_err()
+        }
+        let ((), items) = Scope::scope_and_block(|scope| {
+            scope.spawn_cancellable(proc(), || false);
+            scope.cancel();
+        });
+        assert_eq!(items.len(), 1);
+        for i in items {
+            assert_eq!(future_value(i), false);
+        }
     }
 
 
