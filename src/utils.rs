@@ -1,4 +1,3 @@
-#[macro_use]
 macro_rules! cfg_async_std {
     ($($item:item)*) => {
         $(
@@ -8,7 +7,6 @@ macro_rules! cfg_async_std {
     }
 }
 
-#[macro_use]
 #[allow(unused_macros)]
 macro_rules! cfg_async_std_or_else {
     ($($item:item)*) => {
@@ -19,7 +17,6 @@ macro_rules! cfg_async_std_or_else {
     }
 }
 
-#[macro_use]
 macro_rules! cfg_tokio {
     ($($item:item)*) => {
         $(
@@ -29,7 +26,6 @@ macro_rules! cfg_tokio {
     }
 }
 
-#[macro_use]
 macro_rules! cfg_any_spawner {
     ($($item:item)*) => {
         $(
@@ -39,7 +35,6 @@ macro_rules! cfg_any_spawner {
     }
 }
 
-#[macro_use]
 macro_rules! cfg_no_spawner {
     ($($item:item)*) => {
         $(
