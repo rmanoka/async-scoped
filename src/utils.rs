@@ -35,6 +35,7 @@ macro_rules! cfg_any_spawner {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! cfg_no_spawner {
     ($($item:item)*) => {
         $(
