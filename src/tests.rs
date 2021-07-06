@@ -1,4 +1,3 @@
-#[macro_use]
 macro_rules! test_fixtures {
     ($($item:item)*) => {
         $(
@@ -66,7 +65,6 @@ test_fixtures! {
         assert_eq!(vals.len(), 11);
 
     }
-
     async fn scope_async() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
@@ -115,7 +113,6 @@ test_fixtures! {
 
         assert_eq!(vals.len(), 10);
     }
-
     async fn test_scope_and_block() {
         let not_copy = String::from("hello world!");
         let not_copy_ref = &not_copy;
@@ -132,6 +129,26 @@ test_fixtures! {
         assert_eq!(vals.len(), 10);
     }
 
+    // Check that a cancellable future works as the
+    // contained future under normal circumstances.
+    async fn test_cancellation_completeness() {
+        use async_std::future;
+        use std::time::*;
+
+        // Represents a work future
+        async fn proc() -> bool {
+            future::timeout(
+                Duration::from_millis(500),
+                future::pending::<()>(),
+            ).await.is_err()
+        }
+        let ((), items) = Scope::scope_and_block(|scope| {
+            scope.spawn_cancellable(proc(), || false);
+        });
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0], true);
+    }
+
 
     // This is a simplified version of the soundness bug
     // pointed out on [reddit][reddit-ref]. Here, we test that
@@ -140,7 +157,7 @@ test_fixtures! {
     // future should lead to an invalid memory access.
     //
     // [reddit-ref]: https://www.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c?utm_source=share&utm_medium=web2x
-    async fn cancellation_soundness() {
+    async fn test_cancellation_soundness() {
         use async_std::future;
         use std::time::*;
 
