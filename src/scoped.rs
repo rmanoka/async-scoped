@@ -83,6 +83,21 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
                 .unwrap_or_else(|_| default())
         })
     }
+
+    pub fn spawn_blocking<F: FnOnce() -> T + Send + 'a>(&mut self, f: F)
+    where
+        Sp: FuncSpawner<T, SpawnHandle = <Sp as Spawner<T>>::SpawnHandle>,
+    {
+        let handle = Sp::spawn_func(unsafe {
+            std::mem::transmute::<_, Box<dyn FnOnce() -> T + Send>>(
+                Box::new(f) as Box<dyn FnOnce() -> T + Send>
+            )
+        });
+        self.futs.push(handle);
+        self.len += 1;
+        self.remaining += 1;
+
+    }
 }
 
 impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
