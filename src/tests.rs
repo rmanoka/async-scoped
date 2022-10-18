@@ -135,6 +135,22 @@ test_fixtures! {
         assert_eq!(vals.len(), 10);
     }
 
+    async fn test_scope_and_block_spawn_blocking() {
+        let not_copy = String::from("hello world!");
+        let not_copy_ref = &not_copy;
+
+        let ((), vals) = Scope::scope_and_block(|s| {
+            for _ in 0..10 {
+                let proc = || {
+                    assert_eq!(not_copy_ref, "hello world!");
+                };
+                s.spawn_blocking(proc);
+            }
+        });
+
+        assert_eq!(vals.len(), 10);
+    }
+
     // Check that a cancellable future works as the
     // contained future under normal circumstances.
     async fn test_cancellation_completeness() {

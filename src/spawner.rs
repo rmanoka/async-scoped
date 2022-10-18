@@ -19,7 +19,7 @@ pub trait Blocker {
 #[cfg(feature = "use-async-std")]
 pub mod use_async_std {
     use super::*;
-    use async_std::task::{spawn, block_on, JoinHandle};
+    use async_std::task::{spawn, block_on, spawn_blocking, JoinHandle};
     pub struct AsyncStd;
 
     impl<T: Send + 'static> Spawner<T> for AsyncStd {
@@ -28,6 +28,14 @@ pub mod use_async_std {
 
         fn spawn<F: Future<Output=T> + Send + 'static>(f: F) -> Self::SpawnHandle {
             spawn(f)
+        }
+    }
+    impl<T: Send + 'static> FuncSpawner<T> for AsyncStd {
+        type FutureOutput = T;
+        type SpawnHandle = JoinHandle<T>;
+
+        fn spawn_func<F: FnOnce() -> T + Send + 'static>(f: F) -> Self::SpawnHandle {
+            spawn_blocking(f)
         }
     }
     impl Blocker for AsyncStd {
