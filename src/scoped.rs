@@ -50,9 +50,8 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         }
     }
 
-    /// Spawn a future with `async_std::task::spawn`. The
-    /// future is expected to be driven to completion before
-    /// 'a expires.
+    /// Spawn a future with the executor's `task::spawn` functionality. The
+    /// future is expected to be driven to completion before 'a expires.
     pub fn spawn<F: Future<Output = T> + Send + 'a>(&mut self, f: F) {
         let handle = Sp::spawn(unsafe {
             std::mem::transmute::<_, Pin<Box<dyn Future<Output = T> + Send>>>(
@@ -64,7 +63,8 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         self.remaining += 1;
     }
 
-    /// Spawn a cancellable future with `async_std::task::spawn`
+    /// Spawn a cancellable future with the executor's `task::spawn`
+    /// functionality.
     ///
     /// The future is cancelled if the `Scope` is dropped
     /// pre-maturely. It can also be cancelled by explicitly
@@ -84,6 +84,12 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         })
     }
 
+    /// Spawn a function as a blocking future with executor's `spawn_blocking`
+    /// functionality.
+    ///
+    /// The future is cancelled if the `Scope` is dropped
+    /// pre-maturely. It can also be cancelled by explicitly
+    /// calling (and awaiting) the `cancel` method.
     pub fn spawn_blocking<F: FnOnce() -> T + Send + 'a>(&mut self, f: F)
     where
         Sp: FuncSpawner<T, SpawnHandle = <Sp as Spawner<T>>::SpawnHandle>,
