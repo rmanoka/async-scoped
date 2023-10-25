@@ -23,7 +23,7 @@
 //!
 //! ``` rust, ignore
 //! pub unsafe fn scope<'a, T: Send + 'static,
-//!              F: FnOnce(&mut Scope<'a, T>)>(f: F)
+//!              F: FnOnce(&mut TokioScope<'a, T>)>(f: F)
 //!              -> impl Stream {
 //!     // ...
 //! }
@@ -64,13 +64,12 @@
 //!
 //! ## Executor Selection
 //!
-//! Users **must use** either "use-async-std", or the
-//! "use-tokio" feature gates, to obtain a usable scope
-//! type. These gates provide [`TokioScope`] and
-//! [`AsyncScope`] that support spawning, and blocking. Here
-//! is a run-down of key differences between the two
-//! runtimes.
+//! Users may use "use-async-std", or the
+//! "use-tokio" features to enable specific executor implementations.
+//! Those are not necessary, you may freely implement traits `Spawner`, `Blocker`, etc for your own
+//! runtime. Just ensure you follow the safety idea.
 //!
+//! Some notes on default implementations:
 //! 1. [`AsyncScope`] may run into a dead-lock if used in
 //! deep recursions (depth > #num-cores / 2).
 //!
