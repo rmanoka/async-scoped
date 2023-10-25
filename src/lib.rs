@@ -37,7 +37,7 @@
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = async_scoped::AsyncScope::scope_and_block(|s| {
+//!     let (foo, outputs) = async_scoped::AsyncStdScope::scope_and_block(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
@@ -147,20 +147,14 @@ mod utils;
 mod scoped;
 pub use scoped::Scope;
 
-cfg_async_std! {
-    pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
-    pub use spawner::use_async_std::AsyncStd;
-}
+#[cfg(feature = "use-tokio")]
+pub type TokioScope<'a, T> = Scope<'a, T, spawner::use_tokio::Tokio>;
 
-cfg_tokio!{
-    pub type TokioScope<'a, T> = scoped::Scope<'a, T, spawner::use_tokio::Tokio>;
-    pub use spawner::use_tokio::Tokio;
-}
+#[cfg(feature = "use-async-std")]
+pub type AsyncStdScope<'a, T> = Scope<'a, T, spawner::use_async_std::AsyncStd>;
 
-mod spawner;
+pub mod spawner;
 mod usage;
 
-cfg_any_spawner!{
-    #[cfg(test)]
-    mod tests;
-}
+#[cfg(test)]
+mod tests;

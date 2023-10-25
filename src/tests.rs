@@ -9,7 +9,7 @@ macro_rules! test_fixtures {
 }
 
 cfg_async_std! {
-    use crate::AsyncScope as Scope;
+    use crate::AsyncStdScope as Scope;
 
     fn future_value<T>(v: T) -> T {
         v
@@ -78,7 +78,7 @@ test_fixtures! {
         let stream = unsafe {
             use async_std::future::{timeout, pending};
             use std::time::Duration;
-            let mut s = Scope::create();
+            let mut s = Scope::create(Default::default());
             for _ in 0..10 {
                 let proc = || async move {
                     assert_eq!(not_copy_ref, "hello world!");
@@ -254,7 +254,7 @@ test_fixtures! {
     // This test is resource consuming and ignored by default
     #[ignore]
     async fn backpressure() {
-        let mut s = unsafe { Scope::create() };
+        let mut s = unsafe { Scope::create(Default::default()) };
         let limit = 0x10;
         for i in 0..0x100 {
             s.spawn(async {

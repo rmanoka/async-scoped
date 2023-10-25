@@ -2,9 +2,9 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use futures::future::{AbortHandle, Abortable};
 use futures::stream::FuturesUnordered;
 use futures::{Future, Stream};
-use futures::future::{AbortHandle, Abortable};
 
 use pin_project::*;
 
@@ -21,6 +21,7 @@ use crate::spawner::*;
 /// is driven to completion.
 #[pin_project(PinnedDrop)]
 pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
+    spawner: Option<Sp>,
     done: bool,
     len: usize,
     remaining: usize,
@@ -38,8 +39,9 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     ///
     /// This function is unsafe as `futs` may hold futures
     /// which have to be manually driven to completion.
-    pub unsafe fn create() -> Self {
+    pub unsafe fn create(spawner: Sp) -> Self {
         Scope {
+            spawner: Some(spawner),
             done: false,
             len: 0,
             remaining: 0,
@@ -50,10 +52,14 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         }
     }
 
+    fn spawner(&self) -> &Sp {
+        self.spawner.as_ref().expect("invariant:spawner is always available until scope is dropped")
+    }
+
     /// Spawn a future with the executor's `task::spawn` functionality. The
     /// future is expected to be driven to completion before 'a expires.
     pub fn spawn<F: Future<Output = T> + Send + 'a>(&mut self, f: F) {
-        let handle = Sp::spawn(unsafe {
+        let handle = self.spawner().spawn(unsafe {
             std::mem::transmute::<_, Pin<Box<dyn Future<Output = T> + Send>>>(
                 Box::pin(f) as Pin<Box<dyn Future<Output = T>>>
             )
@@ -78,10 +84,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         let (h, reg) = AbortHandle::new_pair();
         self.abort_handles.push(h);
         let fut = Abortable::new(f, reg);
-        self.spawn(async {
-            fut.await
-                .unwrap_or_else(|_| default())
-        })
+        self.spawn(async { fut.await.unwrap_or_else(|_| default()) })
     }
 
     /// Spawn a function as a blocking future with executor's `spawn_blocking`
@@ -94,7 +97,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     where
         Sp: FuncSpawner<T, SpawnHandle = <Sp as Spawner<T>>::SpawnHandle>,
     {
-        let handle = Sp::spawn_func(unsafe {
+        let handle = self.spawner().spawn_func(unsafe {
             std::mem::transmute::<_, Box<dyn FnOnce() -> T + Send>>(
                 Box::new(f) as Box<dyn FnOnce() -> T + Send>
             )
@@ -102,7 +105,6 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         self.futs.push(handle);
         self.len += 1;
         self.remaining += 1;
-
     }
 }
 
@@ -164,7 +166,8 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
 impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
     fn drop(mut self: Pin<&mut Self>) {
         if !self.done {
-            <Sp as Blocker>::block_on(async {
+            let spawner = self.spawner.take().expect("invariant:spawner must be taken only on drop");
+            spawner.block_on(async {
                 self.cancel();
                 self.collect().await;
             });
