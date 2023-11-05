@@ -1,7 +1,7 @@
-use crate::Scope;
 use crate::spawner::*;
+use crate::Scope;
 
-impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
+impl<'a, T, Sp: Spawner<T> + Blocker + Default> Scope<'a, T, Sp> {
     /// Creates a `Scope` to spawn non-'static futures. The
     /// function is called with a block which takes an `&mut
     /// Scope`. The `spawn` method on this arg. can be used to
@@ -23,11 +23,12 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// before being forgotten. Dropping it is okay, but blocks
     /// the current thread until all spawned futures complete.
     pub unsafe fn scope<R, F>(f: F) -> (Self, R)
-    where T: Send + 'static,
-          Sp: Spawner<T> + Blocker,
-          F: FnOnce(&mut Scope<'a, T, Sp>) -> R
+    where
+        T: Send + 'static,
+        Sp: Spawner<T> + Blocker,
+        F: FnOnce(&mut Scope<'a, T, Sp>) -> R,
     {
-        let mut scope = Scope::create();
+        let mut scope = Scope::create(Default::default());
         let op = f(&mut scope);
         (scope, op)
     }
@@ -53,12 +54,13 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// top-level scope, or there should not be any spurious
     /// future cancellations within the top level scope.
     pub fn scope_and_block<R, F>(f: F) -> (R, Vec<Sp::FutureOutput>)
-    where T: Send + 'static,
-          Sp: Spawner<T> + Blocker,
-          F: FnOnce(&mut Scope<'a, T, Sp>) -> R
+    where
+        T: Send + 'static,
+        Sp: Spawner<T> + Blocker,
+        F: FnOnce(&mut Scope<'a, T, Sp>) -> R,
     {
-        let (mut stream, block_output) = unsafe {Self::scope(f)};
-        let proc_outputs = Sp::block_on(stream.collect());
+        let (mut stream, block_output) = unsafe { Self::scope(f) };
+        let proc_outputs = Sp::default().block_on(stream.collect());
         (block_output, proc_outputs)
     }
 
@@ -81,8 +83,9 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     ///
     /// [tests-src]: https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs
     pub async unsafe fn scope_and_collect<R, F>(f: F) -> (R, Vec<Sp::FutureOutput>)
-    where T: Send + 'static,
-          F: FnOnce(&mut Scope<'a, T, Sp>) -> R
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Scope<'a, T, Sp>) -> R,
     {
         let (mut stream, block_output) = Self::scope(f);
         let proc_outputs = stream.collect().await;

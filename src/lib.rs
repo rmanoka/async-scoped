@@ -23,7 +23,7 @@
 //!
 //! ``` rust, ignore
 //! pub unsafe fn scope<'a, T: Send + 'static,
-//!              F: FnOnce(&mut Scope<'a, T>)>(f: F)
+//!              F: FnOnce(&mut TokioScope<'a, T>)>(f: F)
 //!              -> impl Stream {
 //!     // ...
 //! }
@@ -37,7 +37,7 @@
 //! async fn scoped_futures() {
 //!     let not_copy = String::from("hello world!");
 //!     let not_copy_ref = &not_copy;
-//!     let (foo, outputs) = async_scoped::AsyncScope::scope_and_block(|s| {
+//!     let (foo, outputs) = async_scoped::AsyncStdScope::scope_and_block(|s| {
 //!         for _ in 0..10 {
 //!             let proc = || async {
 //!                 assert_eq!(not_copy_ref, "hello world!");
@@ -64,13 +64,12 @@
 //!
 //! ## Executor Selection
 //!
-//! Users **must use** either "use-async-std", or the
-//! "use-tokio" feature gates, to obtain a usable scope
-//! type. These gates provide [`TokioScope`] and
-//! [`AsyncScope`] that support spawning, and blocking. Here
-//! is a run-down of key differences between the two
-//! runtimes.
+//! Users may use "use-async-std", or the
+//! "use-tokio" features to enable specific executor implementations.
+//! Those are not necessary, you may freely implement traits `Spawner`, `Blocker`, etc for your own
+//! runtime. Just ensure you follow the safety idea.
 //!
+//! Some notes on default implementations:
 //! 1. [`AsyncScope`] may run into a dead-lock if used in
 //! deep recursions (depth > #num-cores / 2).
 //!
@@ -147,20 +146,14 @@ mod utils;
 mod scoped;
 pub use scoped::Scope;
 
-cfg_async_std! {
-    pub type AsyncScope<'a, T> = scoped::Scope<'a, T, spawner::use_async_std::AsyncStd>;
-    pub use spawner::use_async_std::AsyncStd;
-}
+#[cfg(feature = "use-tokio")]
+pub type TokioScope<'a, T> = Scope<'a, T, spawner::use_tokio::Tokio>;
 
-cfg_tokio!{
-    pub type TokioScope<'a, T> = scoped::Scope<'a, T, spawner::use_tokio::Tokio>;
-    pub use spawner::use_tokio::Tokio;
-}
+#[cfg(feature = "use-async-std")]
+pub type AsyncStdScope<'a, T> = Scope<'a, T, spawner::use_async_std::AsyncStd>;
 
-mod spawner;
+pub mod spawner;
 mod usage;
 
-cfg_any_spawner!{
-    #[cfg(test)]
-    mod tests;
-}
+#[cfg(test)]
+mod tests;
