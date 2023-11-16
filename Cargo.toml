@@ -1,6 +1,6 @@
 [package]
 name = "async-scoped"
-version = "0.7.1"
+version = "0.8.0"
 authors = ["Rajsekar Manokaran <rajsekar@gmail.com>"]
 edition = "2018"
 
