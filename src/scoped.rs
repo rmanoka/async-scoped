@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::{AbortHandle, Abortable};
-use futures::stream::FuturesUnordered;
+use futures::stream::{FuturesOrdered};
 use futures::{Future, Stream};
 
 use pin_project::*;
@@ -26,7 +26,7 @@ pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
     len: usize,
     remaining: usize,
     #[pin]
-    futs: FuturesUnordered<Sp::SpawnHandle>,
+    futs: FuturesOrdered<Sp::SpawnHandle>,
     abort_handles: Vec<AbortHandle>,
 
     // Future proof against variance changes
@@ -45,7 +45,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
             done: false,
             len: 0,
             remaining: 0,
-            futs: FuturesUnordered::new(),
+            futs: FuturesOrdered::new(),
             abort_handles: vec![],
             _marker: PhantomData,
             _spawn_marker: PhantomData,
@@ -64,7 +64,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
                 Box::pin(f) as Pin<Box<dyn Future<Output = T>>>
             )
         });
-        self.futs.push(handle);
+        self.futs.push_back(handle);
         self.len += 1;
         self.remaining += 1;
     }
@@ -102,7 +102,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
                 Box::new(f) as Box<dyn FnOnce() -> T + Send>
             )
         });
-        self.futs.push(handle);
+        self.futs.push_back(handle);
         self.len += 1;
         self.remaining += 1;
     }
