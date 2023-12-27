@@ -35,3 +35,8 @@ async-std = { version = "1.12.0", features = ["attributes"] }
 
 [package.metadata.docs.rs]
 features = ["use-async-std", "use-tokio"]
+
+[[bench]]
+name = "spawner"
+path = "benches/spawner.rs"
+harness = false

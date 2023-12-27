@@ -325,6 +325,35 @@ test_fixtures! {
         assert_eq!(nth(input).await, input);
     }
 
+    async fn test_ordered_collect() {
+        use std::future::pending;
+        const N: u64 = 10;
+
+        let (_, r) = Scope::scope_and_block(|scope| {
+            for i in 0..N {
+                scope.spawn(async move {
+                    let _ = async_std::future::timeout(
+                        std::time::Duration::from_millis(100 - i),
+                        pending::<()>()
+                    ).await;
+                    i
+                });
+            }
+        });
+        let r = r.into_iter().map(|v| {
+            #[cfg(feature = "use-tokio")]
+            {
+                v.unwrap()
+            }
+
+            #[cfg(feature = "use-async-std")]
+            {
+                v
+            }
+        }).collect::<Vec<_>>();
+
+        assert_eq!((0..N).into_iter().collect::<Vec<_>>(), r);
+    }
 }
 
 #[cfg(feature = "use-tokio")]
