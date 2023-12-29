@@ -385,3 +385,29 @@ async fn test_async_deadlock_tokio() {
     let input = 200;
     assert_eq!(nth(input).await, input);
 }
+
+/// Dropping an empty scope should be a no-op.
+#[test]
+fn test_empty_scope() {
+    use crate::spawner::{Blocker, Spawner};
+    use std::future::Future;
+
+    struct PanickingSpawner;
+
+    unsafe impl<T: Send + 'static> Spawner<T> for PanickingSpawner {
+        type FutureOutput = T;
+        type SpawnHandle = futures::future::Ready<T>;
+
+        fn spawn<F: Future<Output = T> + Send + 'static>(&self, _f: F) -> Self::SpawnHandle {
+            panic!("spawn should never be called.");
+        }
+    }
+
+    unsafe impl Blocker for PanickingSpawner {
+        fn block_on<T, F: Future<Output = T>>(&self, _f: F) -> T {
+            panic!("block_on should never be called.");
+        }
+    }
+
+    let _ = unsafe { crate::Scope::<(), _>::create(PanickingSpawner) };
+}

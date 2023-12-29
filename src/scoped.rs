@@ -165,7 +165,7 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
 #[pinned_drop]
 impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
     fn drop(mut self: Pin<&mut Self>) {
-        if !self.done {
+        if !(self.done || self.remaining == 0) {
             let spawner = self.spawner.take().expect("invariant:spawner must be taken only on drop");
             spawner.block_on(async {
                 self.cancel();
