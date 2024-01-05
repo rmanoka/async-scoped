@@ -1,9 +1,9 @@
-use std::hint::black_box;
-use futures::future::pending;
 use async_scoped::{
-    Scope,
     spawner::{Blocker, Spawner},
+    Scope,
 };
+use futures::future::pending;
+use std::hint::black_box;
 
 fn spawn_and_collect<Sp: Spawner<usize> + Blocker>(s: &mut Scope<usize, Sp>) {
     const INPUT_SIZE: usize = 1000000;
@@ -14,7 +14,8 @@ fn spawn_and_collect<Sp: Spawner<usize> + Blocker>(s: &mut Scope<usize, Sp>) {
             let _ = async_std::future::timeout(
                 std::time::Duration::from_millis((MAX_DELAY - delay) as u64),
                 pending::<()>(),
-            ).await;
+            )
+            .await;
             i
         });
     }
@@ -47,5 +48,7 @@ fn main() {
         }
     };
 
-    r.into_iter().for_each(|v| { let _ = black_box(v); })
+    r.into_iter().for_each(|v| {
+        let _ = black_box(v);
+    })
 }

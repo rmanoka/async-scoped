@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::{AbortHandle, Abortable};
-use futures::stream::{FuturesOrdered};
+use futures::stream::FuturesOrdered;
 use futures::{Future, Stream};
 
 use pin_project::*;
@@ -53,7 +53,9 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     }
 
     fn spawner(&self) -> &Sp {
-        self.spawner.as_ref().expect("invariant:spawner is always available until scope is dropped")
+        self.spawner
+            .as_ref()
+            .expect("invariant:spawner is always available until scope is dropped")
     }
 
     /// Spawn a future with the executor's `task::spawn` functionality. The
@@ -166,7 +168,10 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
 impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
     fn drop(mut self: Pin<&mut Self>) {
         if !(self.done || self.remaining == 0) {
-            let spawner = self.spawner.take().expect("invariant:spawner must be taken only on drop");
+            let spawner = self
+                .spawner
+                .take()
+                .expect("invariant:spawner must be taken only on drop");
             spawner.block_on(async {
                 self.cancel();
                 self.collect().await;
