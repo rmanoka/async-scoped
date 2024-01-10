@@ -22,9 +22,7 @@ use crate::spawner::*;
 #[pin_project(PinnedDrop)]
 pub struct Scope<'a, T, Sp: Spawner<T> + Blocker> {
     spawner: Option<Sp>,
-    done: bool,
     len: usize,
-    remaining: usize,
     #[pin]
     futs: FuturesOrdered<Sp::SpawnHandle>,
     abort_handles: Vec<AbortHandle>,
@@ -42,9 +40,7 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     pub unsafe fn create(spawner: Sp) -> Self {
         Scope {
             spawner: Some(spawner),
-            done: false,
             len: 0,
-            remaining: 0,
             futs: FuturesOrdered::new(),
             abort_handles: vec![],
             _marker: PhantomData,
@@ -68,7 +64,6 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         });
         self.futs.push_back(handle);
         self.len += 1;
-        self.remaining += 1;
     }
 
     /// Spawn a cancellable future with the executor's `task::spawn`
@@ -106,7 +101,6 @@ impl<'a, T: Send + 'static, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
         });
         self.futs.push_back(handle);
         self.len += 1;
-        self.remaining += 1;
     }
 }
 
@@ -128,13 +122,13 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Scope<'a, T, Sp> {
     /// Number of futures remaining in this scope.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.remaining
+        self.futs.len()
     }
 
     /// A slighly optimized `collect` on the stream. Also
     /// useful when we can not move out of self.
     pub async fn collect(&mut self) -> Vec<Sp::FutureOutput> {
-        let mut proc_outputs = Vec::with_capacity(self.remaining);
+        let mut proc_outputs = Vec::with_capacity(self.remaining());
 
         use futures::StreamExt;
         while let Some(item) = self.next().await {
@@ -149,25 +143,18 @@ impl<'a, T, Sp: Spawner<T> + Blocker> Stream for Scope<'a, T, Sp> {
     type Item = Sp::FutureOutput;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        let poll = this.futs.poll_next(cx);
-        if let Poll::Ready(None) = poll {
-            *this.done = true;
-        } else if poll.is_ready() {
-            *this.remaining -= 1;
-        }
-        poll
+        self.project().futs.poll_next(cx)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        (self.remaining(), Some(self.remaining()))
     }
 }
 
 #[pinned_drop]
 impl<'a, T, Sp: Spawner<T> + Blocker> PinnedDrop for Scope<'a, T, Sp> {
     fn drop(mut self: Pin<&mut Self>) {
-        if !(self.done || self.remaining == 0) {
+        if self.remaining() > 0 {
             let spawner = self
                 .spawner
                 .take()
