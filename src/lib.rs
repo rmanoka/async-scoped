@@ -13,7 +13,7 @@
 //! [`for_each_concurrent`][for_each_concurrent] offer
 //! concurrency, they are bundled as a single [`Task`][Task]
 //! structure by the executor, and hence are not driven
-//! parallelly.
+//! in parallel.
 //!
 //! ## Scope API
 //!

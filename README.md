@@ -14,7 +14,7 @@ smaller than `'static`.
 While the future combinators such as `for_each_concurrent`
 offer concurrency, they are bundled as a single `Task`
 structure by the executor, and hence are not driven
-parallelly. This can be seen when benchmarking a reasonable
+in parallel. This can be seen when benchmarking a reasonable
 number (> ~1K) of I/O futures, or a few CPU heavy futures.
 
 ## Usage
