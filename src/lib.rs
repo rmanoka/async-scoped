@@ -147,10 +147,10 @@ mod scoped;
 pub use scoped::Scope;
 
 #[cfg(feature = "use-tokio")]
-pub type TokioScope<'a, T> = Scope<'a, T, spawner::use_tokio::Tokio>;
+pub type TokioScope<'a, T> = Scope<'a, T, spawner::use_tokio::TokioSpawner>;
 
 #[cfg(feature = "use-async-std")]
-pub type AsyncStdScope<'a, T> = Scope<'a, T, spawner::use_async_std::AsyncStd>;
+pub type AsyncStdScope<'a, T> = Scope<'a, T, spawner::use_async_std::AsyncStdSpawner>;
 
 pub mod spawner;
 mod usage;
