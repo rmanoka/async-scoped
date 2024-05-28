@@ -341,15 +341,7 @@ test_fixtures! {
             }
         });
         let r = r.into_iter().map(|v| {
-            #[cfg(feature = "use-tokio")]
-            {
-                v.unwrap()
-            }
-
-            #[cfg(feature = "use-async-std")]
-            {
-                v
-            }
+            future_value(v)
         }).collect::<Vec<_>>();
 
         assert_eq!((0..N).into_iter().collect::<Vec<_>>(), r);
@@ -359,12 +351,12 @@ test_fixtures! {
 #[cfg(feature = "use-tokio")]
 // https://github.com/rmanoka/async-scoped/issues/2
 // https://github.com/async-rs/async-std/issues/644
-#[tokio::test(flavor = "multi_thread", worker_threads=1)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_async_deadlock_tokio() {
-    use std::future::Future;
-    use futures::FutureExt;
     use crate::TokioScope;
-    fn nth(n: usize) -> impl Future<Output=usize> + Send {
+    use futures::FutureExt;
+    use std::future::Future;
+    fn nth(n: usize) -> impl Future<Output = usize> + Send {
         // eprintln!("nth({})", n);
 
         async move {
@@ -372,8 +364,12 @@ async fn test_async_deadlock_tokio() {
                 0
             } else {
                 TokioScope::scope_and_block(|scope| {
-                    scope.spawn(nth(n-1).boxed());
-                }).1[0].as_ref().unwrap() + 1
+                    scope.spawn(nth(n - 1).boxed());
+                })
+                .1[0]
+                    .as_ref()
+                    .unwrap()
+                    + 1
             };
 
             // eprintln!("nth({})={}", n, result);

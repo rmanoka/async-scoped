@@ -23,7 +23,7 @@ fn spawn_and_collect<Sp: Spawner<usize> + Blocker>(s: &mut Scope<usize, Sp>) {
 
 fn main() {
     let r = {
-        #[cfg(feature = "async-std")]
+        #[cfg(all(not(feature = "use-tokio"), feature = "use-async-std"))]
         {
             // Async-std runtime does not have a straightforward way to configure multi-threaded
             // runtime: https://docs.rs/async-std/latest/async_std/index.html#runtime-configuration
